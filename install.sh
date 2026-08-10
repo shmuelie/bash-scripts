@@ -22,6 +22,7 @@ method='symlink'
 prefix="${HOME}/.local/bin"
 do_completions=1
 uninstall=0
+update=0
 rc_override=''
 
 msg()  { printf '%s\n' "$*"; }
@@ -38,6 +39,7 @@ Options:
   --prefix DIR            Symlink target directory (default: ~/.local/bin).
   --rc FILE               Shell rc file to edit (default: ~/.zshrc or ~/.bashrc).
   --no-completions        Do not wire up shell completions.
+  --update                git pull the repo, then refresh the install.
   --uninstall             Remove symlinks and the rc block this installer added.
   -h, --help              Show this help.
 EOF
@@ -49,6 +51,7 @@ while [[ $# -gt 0 ]]; do
         --prefix) prefix="$2"; shift 2 ;;
         --rc) rc_override="$2"; shift 2 ;;
         --no-completions) do_completions=0; shift ;;
+        --update) update=1; shift ;;
         --uninstall) uninstall=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "Unknown option: $1 (see --help)" ;;
@@ -56,6 +59,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$method" == "symlink" || "$method" == "path" ]] || die "Invalid --method: $method"
+[[ "$update" == "1" && "$uninstall" == "1" ]] && die "Use --update or --uninstall, not both."
 
 # --- Locate the repo, bootstrapping via git clone when piped from curl -------
 resolve_repo() {
@@ -185,12 +189,32 @@ check_deps() {
     command -v node >/dev/null 2>&1 || msg  "Optional: node not found (needed for copilot-session-maintenance)."
 }
 
+# update_repo — git pull the repo (ff-only), reporting the version change.
+update_repo() {
+    command -v git >/dev/null 2>&1 || die "git is required for --update."
+    [[ -d "$REPO/.git" ]] || die "--update requires a git clone (no .git at $REPO). Use the curl|bash bootstrap instead."
+    local before after
+    before="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    msg "Updating $REPO"
+    git -C "$REPO" pull --ff-only
+    after="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    if [[ "$before" == "$after" ]]; then
+        msg "Already up to date ($after)."
+    else
+        msg "Updated $before -> $after."
+    fi
+}
+
 # --- Main --------------------------------------------------------------------
 if [[ "$uninstall" == "1" ]]; then
     [[ "$method" == "symlink" ]] && symlink_uninstall
     remove_rc_block
     msg "Uninstall complete."
     exit 0
+fi
+
+if [[ "$update" == "1" ]]; then
+    update_repo
 fi
 
 check_deps
