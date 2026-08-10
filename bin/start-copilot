@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# start-copilot — launch the Copilot CLI with automatic session resume, default
+# permissions, destructive-git deny rules, and MCP autoConnect policy.
+# Ported from Start-Copilot. Delegates argument building to the shared
+# launch-plan core so overlays can reuse identical command lines.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/copilot/copilot-common.sh"
+source "$_SHM_ROOT/lib/copilot/launch-plan.sh"
+
+# Pull out launcher-owned flags (--passthru, --dry-run/--whatif) before delegating.
+args=(); passthru=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --passthru) passthru=1; shift ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        *) args+=("$1"); shift ;;
+    esac
+done
+
+build_launch_plan "${args[@]+"${args[@]}"}" || exit $?
+
+# --passthru: print the resolved plan (like Start-Copilot -PassThru) and stop.
+if [[ "$passthru" == "1" ]]; then
+    printf 'Exe: %s\n' "$COPILOT_EXE"
+    printf 'Passthrough: %s\n' "$([[ "$COPILOT_PASSTHROUGH" == "1" ]] && echo true || echo false)"
+    printf 'Args:'
+    printf ' %q' "${COPILOT_ARGS[@]}"
+    printf '\n'
+    exit 0
+fi
+
+if ! should_process "Execute: $COPILOT_EXE ${COPILOT_ARGS[*]}"; then
+    exit 0
+fi
+
+set +e
+"$COPILOT_EXE" "${COPILOT_ARGS[@]}"
+exit_code=$?
+set -e
+
+# Recover the terminal if the engine crashed out of its TUI.
+if [[ "$exit_code" -ne 0 ]]; then
+    if [[ -x "$_SHM_ROOT/bin/reset-terminal" ]]; then
+        "$_SHM_ROOT/bin/reset-terminal" || true
+    fi
+fi
+
+exit "$exit_code"

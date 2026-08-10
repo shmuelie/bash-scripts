@@ -26,3 +26,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `git-status-summary` — parse `git status` into a structured summary.
   - bash and zsh completion suggesting worktree branch names (substring match),
     replacing the compiled PSReadLine predictor.
+- Copilot module (`bin/copilot-*`, `bin/start-copilot`), a bash port of
+  `Shmuelie.Copilot`:
+  - `start-copilot` and `copilot-launch-plan` — the shared launcher core with
+    automatic session resume, default `--allow-all --experimental`, the
+    destructive-git deny-tool set, MCP `autoConnect` glob policy, and
+    `--passthru`/`--json` plan inspection.
+  - `copilot-session list/resume/rename/remove` — session CRUD over
+    `~/.copilot/session-state`.
+  - `copilot-session-maintenance merge/compress/repair-events` — event-stream
+    maintenance (Node helper).
+  - `copilot-plugin`, `copilot-marketplace`, `copilot-mcp` — wrappers over the
+    `copilot` CLI.

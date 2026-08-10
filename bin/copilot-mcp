@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# copilot-mcp — manage Copilot CLI MCP servers. Ported from McpServers.ps1.
+# Subcommands: list, add, remove.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/copilot/copilot-common.sh"
+
+usage() { cat <<'EOF'
+Usage: copilot-mcp <command> [args]
+
+Commands:
+  list [pattern] [--source user|workspace|plugin|builtin] [--json]
+                               List configured MCP servers.
+  add <name> [options]         Add an MCP server.
+    --transport stdio|http|sse  (default: stdio)
+    --command <cmd>             Command for stdio servers.
+    --arg <value>               Argument for the stdio command (repeatable).
+    --url <url>                 URL for http/sse servers.
+    --env KEY=VALUE             Environment variable (repeatable).
+    --header 'H: V'             HTTP header (repeatable).
+  remove <name> [--dry-run]    Remove an MCP server by name.
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
+esac
+require_cmd copilot
+exe="$(resolve_copilot)"
+
+case "$cmd" in
+    list)
+        require_cmd jq
+        pattern='*'; source_filter=''; json=0
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --json) json=1; shift ;;
+                --source) source_filter="$2"; shift 2 ;;
+                *) pattern="$1"; shift ;;
+            esac
+        done
+        raw="$("$exe" mcp list --json 2>&1)"
+        # Build normalized rows delimited by SHM_FS (US) so empty fields survive.
+        mapfile -t rows < <(printf '%s' "$raw" | jq -r '.mcpServers // {} | to_entries[] |
+            [.key, (.value.type // ""), (.value.command // ""),
+             ((.value.args // []) | join(" ")), (.value.url // ""),
+             (.value.source // "")] | join("\u001f")')
+        out=()
+        for r in "${rows[@]:-}"; do
+            [[ -z "$r" ]] && continue
+            IFS="$SHM_FS" read -r name type command args url src <<< "$r"
+            # shellcheck disable=SC2053
+            [[ "$name" == $pattern ]] || continue
+            [[ -n "$source_filter" && "$src" != "$source_filter" ]] && continue
+            out+=("$name$SHM_FS$type$SHM_FS$command$SHM_FS$args$SHM_FS$url$SHM_FS$src")
+        done
+        if [[ "$json" == "1" ]]; then
+            if [[ ${#out[@]} -eq 0 ]]; then echo '[]'; else
+                printf '%s\n' "${out[@]}" | jq -R -s 'def nz: if .=="" then null else . end;
+                    split("\n") | map(select(length>0) | split("\u001f") |
+                    {name:.[0], type:(.[1]|nz), command:(.[2]|nz), args:(.[3]|nz),
+                     url:(.[4]|nz), source:(.[5]|nz)})'
+            fi
+        else
+            for r in "${out[@]:-}"; do
+                [[ -z "$r" ]] && continue
+                IFS="$SHM_FS" read -r name type command args url src <<< "$r"
+                printf '%-24s %-6s %-8s %s\n' "$name" "$type" "$src" "${url:-$command $args}"
+            done
+        fi
+        ;;
+    add)
+        name="${1:-}"; shift || true
+        [[ -n "$name" && "$name" != -* ]] || die 'add requires a server name.'
+        transport='stdio'; command=''; url=''; args=(); envs=(); headers=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --transport) transport="$2"; shift 2 ;;
+                --command) command="$2"; shift 2 ;;
+                --arg) args+=("$2"); shift 2 ;;
+                --url) url="$2"; shift 2 ;;
+                --env) envs+=("$2"); shift 2 ;;
+                --header) headers+=("$2"); shift 2 ;;
+                --dry-run|--whatif) DRY_RUN=1; shift ;;
+                *) die "Unknown option: $1" ;;
+            esac
+        done
+        should_process "copilot mcp add $name" || exit 0
+        add_args=(mcp add --transport "$transport")
+        for e in "${envs[@]:-}"; do [[ -n "$e" ]] && add_args+=(--env "$e"); done
+        for h in "${headers[@]:-}"; do [[ -n "$h" ]] && add_args+=(--header "$h"); done
+        add_args+=("$name")
+        if [[ "$transport" == "stdio" ]]; then
+            add_args+=(--)
+            [[ -n "$command" ]] && add_args+=("$command")
+            for a in "${args[@]:-}"; do [[ -n "$a" ]] && add_args+=("$a"); done
+        else
+            [[ -n "$url" ]] && add_args+=("$url")
+        fi
+        "$exe" "${add_args[@]}" || die "Failed to add MCP server: $name"
+        ;;
+    remove)
+        name="${1:-}"; [[ "$name" == "--dry-run" || "$name" == "--whatif" ]] && { DRY_RUN=1; name="${2:-}"; }
+        [[ -n "$name" ]] || die 'remove requires a server name.'
+        should_process "copilot mcp remove $name" || exit 0
+        "$exe" mcp remove "$name" || die "Failed to remove MCP server: $name"
+        ;;
+    *) die "Unknown command: $cmd (see --help)" ;;
+esac

@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# copilot-marketplace — manage Copilot CLI plugin marketplaces.
+# Ported from Marketplaces.ps1. Subcommands: list, add, remove, browse.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/copilot/copilot-common.sh"
+
+usage() { cat <<'EOF'
+Usage: copilot-marketplace <command> [args]
+
+Commands:
+  list [pattern] [--json]      List registered marketplaces (optional glob filter).
+  add <source>                 Register a marketplace (owner/repo).
+  remove <name> [--dry-run]    Remove a registered marketplace by name.
+  browse <name> [--json]       List plugins available in a marketplace.
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
+esac
+require_cmd copilot
+exe="$(resolve_copilot)"
+
+case "$cmd" in
+    list)
+        pattern='*'; json=0
+        for a in "$@"; do case "$a" in --json) json=1 ;; *) pattern="$a" ;; esac; done
+        rows=()
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^[[:space:]]+[◆•][[:space:]]+([^[:space:]]+)[[:space:]]+\((GitHub|URL):[[:space:]]+(.+)\) ]]; then
+                mkt="${BASH_REMATCH[1]}"; src="${BASH_REMATCH[3]}"
+                # shellcheck disable=SC2053
+                [[ "$mkt" == $pattern ]] && rows+=("$mkt"$'\t'"$src")
+            fi
+        done < <("$exe" plugin marketplace list 2>&1)
+        if [[ "$json" == "1" ]]; then
+            require_cmd jq
+            if [[ ${#rows[@]} -eq 0 ]]; then echo '[]'; else
+                printf '%s\n' "${rows[@]}" | jq -R -s 'split("\n") | map(select(length>0) |
+                    split("\t") | {name:.[0], repository:.[1]})'
+            fi
+        else
+            for r in "${rows[@]:-}"; do
+                [[ -z "$r" ]] && continue
+                IFS=$'\t' read -r mkt src <<< "$r"
+                printf '%-30s %s\n' "$mkt" "$src"
+            done
+        fi
+        ;;
+    add)
+        src="${1:-}"; [[ -n "$src" ]] || die 'add requires a source.'
+        should_process "copilot plugin marketplace add $src" || exit 0
+        "$exe" plugin marketplace add "$src" || die "Failed to register marketplace: $src"
+        ;;
+    remove)
+        name="${1:-}"; [[ "$name" == "--dry-run" || "$name" == "--whatif" ]] && { DRY_RUN=1; name="${2:-}"; }
+        [[ -n "$name" ]] || die 'remove requires a marketplace name.'
+        should_process "copilot plugin marketplace remove $name" || exit 0
+        "$exe" plugin marketplace remove "$name" || die "Failed to remove marketplace: $name"
+        ;;
+    browse)
+        name="${1:-}"; json=0
+        [[ "$name" == "--json" ]] && { json=1; name="${2:-}"; }
+        [[ "${2:-}" == "--json" ]] && json=1
+        [[ -n "$name" ]] || die 'browse requires a marketplace name.'
+        rows=()
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^[[:space:]]+•[[:space:]]+([^[:space:]]+)[[:space:]]+-[[:space:]]+(.+)$ ]]; then
+                pname="${BASH_REMATCH[1]}"; desc="${BASH_REMATCH[2]%"${BASH_REMATCH[2]##*[![:space:]]}"}"
+                rows+=("$pname"$'\t'"$desc")
+            fi
+        done < <("$exe" plugin marketplace browse "$name" 2>&1)
+        if [[ "$json" == "1" ]]; then
+            require_cmd jq
+            if [[ ${#rows[@]} -eq 0 ]]; then echo '[]'; else
+                printf '%s\n' "${rows[@]}" | jq -R -s --arg mkt "$name" 'split("\n") |
+                    map(select(length>0) | split("\t") |
+                    {name:.[0], description:.[1], marketplace:$mkt})'
+            fi
+        else
+            for r in "${rows[@]:-}"; do
+                [[ -z "$r" ]] && continue
+                IFS=$'\t' read -r pname desc <<< "$r"
+                printf '%-30s %s\n' "$pname" "$desc"
+            done
+        fi
+        ;;
+    *) die "Unknown command: $cmd (see --help)" ;;
+esac

@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# copilot-launch-plan — resolve and print the Copilot CLI launch plan without
+# launching. Ported from Get-CopilotLaunchPlan. Mirrors Start-Copilot -PassThru.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/copilot/copilot-common.sh"
+source "$_SHM_ROOT/lib/copilot/launch-plan.sh"
+
+# Extract our --json before delegating to the builder.
+args=(); want_json=0
+for a in "$@"; do
+    case "$a" in
+        --json) want_json=1 ;;
+        *) args+=("$a") ;;
+    esac
+done
+
+build_launch_plan "${args[@]}" || exit $?
+
+if [[ "$want_json" == "1" ]]; then
+    require_cmd jq
+    printf '%s\n' "${COPILOT_ARGS[@]}" | jq -R -s \
+        --arg exe "$COPILOT_EXE" \
+        --argjson passthrough "$([[ "$COPILOT_PASSTHROUGH" == "1" ]] && echo true || echo false)" \
+        '{exe:$exe, passthrough:$passthrough,
+          args: (split("\n") | map(select(length>0)))}'
+else
+    printf 'Exe: %s\n' "$COPILOT_EXE"
+    printf 'Passthrough: %s\n' "$([[ "$COPILOT_PASSTHROUGH" == "1" ]] && echo true || echo false)"
+    printf 'Args:'
+    printf ' %q' "${COPILOT_ARGS[@]}"
+    printf '\n'
+fi

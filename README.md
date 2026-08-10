@@ -27,7 +27,7 @@ export PATH="/path/to/bash-scripts/bin:$PATH"
 | Area | Status | Focus |
 |---|---|---|
 | [Git](docs/git.md) | Ported | Worktrees, repo layout, status, sync, stale branches, completion |
-| Copilot | Planned | Copilot CLI launcher, sessions, plugins, marketplaces, MCP |
+| [Copilot](docs/copilot.md) | Ported | Copilot CLI launcher, sessions, plugins, marketplaces, MCP |
 | Node | Planned | Node/nvm versions, npm packages, Azure DevOps npm credentials |
 | Utilities | Planned | .NET, Python, VS Code, terminal, services, diagnostics |
 
@@ -50,6 +50,8 @@ export PATH="/path/to/bash-scripts/bin:$PATH"
 
 - `bash` 4+, `git`, and `jq`.
 - Optional: `fzf` for nicer interactive pickers (falls back to `select`).
+- `node` for the Copilot session-maintenance subcommands (always present where
+  the Copilot CLI runs).
 
 ## Development
 

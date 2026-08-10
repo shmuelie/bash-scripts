@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# copilot-session — manage Copilot CLI sessions. Ported from Sessions.ps1
+# (list/resume/rename/remove). Session maintenance (merge/compress/repair) lives
+# in copilot-session-maintenance.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/copilot/copilot-common.sh"
+
+usage() { cat <<'EOF'
+Usage: copilot-session <command> [args]
+
+Commands:
+  list [--all] [--id <id>] [--json]   List sessions (defaults to current dir).
+  resume <id> [prompt] [-- copilot-args...]
+                                       Resume a session (autopilot if prompt given).
+  rename <id> <new-name>               Rename a session (updates workspace.yaml).
+  remove <id>... [--dry-run]           Remove sessions by id.
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
+esac
+
+case "$cmd" in
+    list)
+        all_flag=(); only_id=''; json=0
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --all) all_flag=(--all); shift ;;
+                --id) only_id="$2"; shift 2 ;;
+                --json) json=1; shift ;;
+                *) die "Unknown option: $1" ;;
+            esac
+        done
+        id_args=(); [[ -n "$only_id" ]] && id_args=(--id "$only_id")
+        if [[ "$json" == "1" ]]; then
+            require_cmd jq
+            sessions_out="$(copilot_sessions "${all_flag[@]}" "${id_args[@]}")"
+            if [[ -z "$sessions_out" ]]; then echo '[]'; else
+                printf '%s\n' "$sessions_out" | jq -R -s 'def nz: if .=="" then null else . end;
+                    split("\n") | map(select(length>0) | split("\u001f") |
+                    {id:.[0], name:.[1], cwd:(.[2]|nz), branch:(.[3]|nz),
+                     repository:(.[4]|nz), createdAt:(.[5]|nz), updatedAt:(.[6]|nz),
+                     eventCount:(.[7]|tonumber), eventSize:(.[8]|tonumber), path:.[9]})'
+            fi
+        else
+            printf '%-38s %-10s %-8s %s\n' 'ID' 'EVENTS' 'SIZE' 'NAME'
+            # shellcheck disable=SC2034  # unpacking a fixed row; not all fields printed
+            while IFS="$SHM_FS" read -r id name s_cwd branch repo created updated ecount esize path; do
+                [[ -z "$id" ]] && continue
+                printf '%-38s %-10s %-8s %s\n' "$id" "$ecount" "$esize" "$name"
+            done < <(copilot_sessions "${all_flag[@]}" "${id_args[@]}")
+        fi
+        ;;
+    resume)
+        id="${1:-}"; shift || true
+        [[ -n "$id" ]] || die 'resume requires a session id.'
+        # A trailing prompt (first non-flag arg) enables autopilot.
+        prompt=''; rest=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --) shift; rest+=("$@"); break ;;
+                -*) rest+=("$1"); shift ;;
+                *) if [[ -z "$prompt" ]]; then prompt="$1"; else rest+=("$1"); fi; shift ;;
+            esac
+        done
+        # Verify the session exists.
+        found="$(copilot_sessions --id "$id" | head -n1)"
+        [[ -n "$found" ]] || die "Session '$id' not found."
+        exe="$(resolve_copilot)"
+        cargs=(--allow-all --experimental --resume "$id")
+        [[ -n "$prompt" ]] && cargs+=(--autopilot -p "$prompt")
+        [[ ${#rest[@]} -gt 0 ]] && cargs+=("${rest[@]}")
+        exec "$exe" "${cargs[@]}"
+        ;;
+    rename)
+        id="${1:-}"; new_name="${2:-}"
+        [[ -n "$id" && -n "$new_name" ]] || die 'rename requires <id> and <new-name>.'
+        row="$(copilot_sessions --id "$id" | head -n1)"
+        [[ -n "$row" ]] || die "Session '$id' not found."
+        path="$(printf '%s' "$row" | cut -d"$SHM_FS" -f10)"
+        ws="$path/workspace.yaml"
+        [[ -f "$ws" ]] || die "workspace.yaml not found for session $id."
+        if ! should_process "Rename session ${id:0:8} to '$new_name'"; then exit 0; fi
+
+        # Rewrite name (handling block scalars) and summary if present.
+        tmp="$(mktemp)"
+        awk -v newname="$new_name" '
+            BEGIN { skip=0 }
+            skip==1 {
+                if ($0 ~ /^[[:space:]]/ || $0 == "") { next }
+                skip=0
+            }
+            /^name:/ {
+                print "name: " newname
+                if ($0 ~ /:[[:space:]]*[|>]/) { skip=1 }
+                next
+            }
+            /^summary:/ { print "summary: " newname; next }
+            { print }
+        ' "$ws" > "$tmp"
+        mv "$tmp" "$ws"
+        log_verbose "Renamed session ${id:0:8} to '$new_name'"
+        copilot_sessions --id "$id"
+        ;;
+    remove)
+        ids=()
+        for a in "$@"; do
+            case "$a" in
+                --dry-run|--whatif) DRY_RUN=1 ;;
+                *) ids+=("$a") ;;
+            esac
+        done
+        [[ ${#ids[@]} -gt 0 ]] || die 'remove requires at least one session id.'
+        for id in "${ids[@]}"; do
+            row="$(copilot_sessions --id "$id" | head -n1)"
+            if [[ -z "$row" ]]; then log_warn "Session '$id' not found."; continue; fi
+            name="$(printf '%s' "$row" | cut -d"$SHM_FS" -f2)"
+            path="$(printf '%s' "$row" | cut -d"$SHM_FS" -f10)"
+            if ! should_process "Remove session: $name ($id)"; then continue; fi
+            rm -rf -- "$path"
+        done
+        ;;
+    *) die "Unknown command: $cmd (see --help)" ;;
+esac
