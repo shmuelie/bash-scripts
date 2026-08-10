@@ -1,5 +1,7 @@
 # bash-scripts
 
+[![Validate scripts](https://github.com/shmuelie/bash-scripts/actions/workflows/ci.yml/badge.svg)](https://github.com/shmuelie/bash-scripts/actions/workflows/ci.yml)
+
 A bash port of the [Shmuelie PowerShell modules](https://github.com/shmuelie/powershell-modules).
 
 The PowerShell project ships four modules for Git, GitHub Copilot CLI, Node.js,
