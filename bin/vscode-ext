@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# vscode-ext — manage VS Code extensions. Ported from VsCodeHelpers.ps1
+# (Get/Install/Uninstall/Update-VsCodeExtension).
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+
+usage() { cat <<'EOF'
+Usage: vscode-ext <command> [options]
+
+Commands:
+  list [pattern] [--category C] [--profile P] [--json]
+      List installed extensions (code --list-extensions --show-versions).
+  install <id> [--pre-release] [--profile P]
+      Install or update an extension (or a .vsix path).
+  uninstall <id> [--dry-run]
+      Uninstall an extension.
+  update
+      Update all extensions (code --update-extensions).
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
+esac
+require_cmd code
+
+case "$cmd" in
+    list)
+        pattern='*'; category=''; profile=''; json=0
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --category) category="$2"; shift 2 ;;
+                --profile) profile="$2"; shift 2 ;;
+                --json) json=1; shift ;;
+                *) pattern="$1"; shift ;;
+            esac
+        done
+        list_args=(--list-extensions --show-versions)
+        [[ -n "$category" ]] && list_args+=(--category "$category")
+        [[ -n "$profile" ]] && list_args+=(--profile "$profile")
+        rows=()
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^(.+)\.(.+)@(.+)$ ]]; then
+                pub="${BASH_REMATCH[1]}"; nm="${BASH_REMATCH[2]}"; ver="${BASH_REMATCH[3]}"
+                full="$pub.$nm"
+                # shellcheck disable=SC2053
+                if [[ "$full" == $pattern || "$nm" == $pattern ]]; then
+                    rows+=("$pub"$'\t'"$nm"$'\t'"$full"$'\t'"$ver")
+                fi
+            fi
+        done < <(code "${list_args[@]}" 2>/dev/null)
+        if [[ "$json" == "1" ]]; then
+            require_cmd jq
+            if [[ ${#rows[@]} -eq 0 ]]; then echo '[]'; else
+                printf '%s\n' "${rows[@]}" | jq -R -s 'split("\n") | map(select(length>0) |
+                    split("\t") | {publisher:.[0], name:.[1], fullId:.[2], version:.[3]})'
+            fi
+        else
+            for r in "${rows[@]:-}"; do
+                [[ -z "$r" ]] && continue
+                IFS=$'\t' read -r pub nm full ver <<< "$r"
+                printf '%-45s %s\n' "$full" "$ver"
+            done
+        fi
+        ;;
+    install)
+        id="${1:-}"; shift || true
+        [[ -n "$id" ]] || die 'install requires an extension id or .vsix path.'
+        install_args=(--install-extension "$id")
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --pre-release) install_args+=(--pre-release); shift ;;
+                --profile) install_args+=(--profile "$2"); shift 2 ;;
+                --dry-run|--whatif) DRY_RUN=1; shift ;;
+                *) die "Unknown option: $1" ;;
+            esac
+        done
+        should_process "code --install-extension $id" || exit 0
+        code "${install_args[@]}"
+        ;;
+    uninstall)
+        id="${1:-}"; [[ "$id" == "--dry-run" || "$id" == "--whatif" ]] && { DRY_RUN=1; id="${2:-}"; }
+        [[ -n "$id" ]] || die 'uninstall requires an extension id.'
+        should_process "code --uninstall-extension $id" || exit 0
+        code --uninstall-extension "$id"
+        ;;
+    update)
+        should_process "code --update-extensions" || exit 0
+        code --update-extensions
+        ;;
+    *) die "Unknown command: $cmd (see --help)" ;;
+esac

@@ -38,3 +38,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     maintenance (Node helper).
   - `copilot-plugin`, `copilot-marketplace`, `copilot-mcp` — wrappers over the
     `copilot` CLI.
+- Node module (`bin/node-*`, `bin/nvm-config`, `bin/npm-package`,
+  `bin/ado-npm-token`), a bash port of `Shmuelie.Node` re-targeted to `nvm.sh`:
+  Node version/alias management, npm package list/update, and an
+  `ado-npm-token` that prints an `export` line for the refreshed token.
+- Utilities module (`bin/*`), a bash port of `Shmuelie.Utilities`:
+  - Cross-platform: `is-elevated`, `in-location`, `repair-global-json`,
+    `reset-terminal`, `dotnet-tool`, `pip-package`, `uv-package`, `vscode-ext`,
+    `start-vscode`, `vscode-chat`.
+  - Sourceable shell helpers in `lib/utils/shell-integration.sh`
+    (`shm_global_constant`, `shm_prepend_path`, `shm_session_title`, ...).
+  - Windows-only commands re-implemented for Linux: `service-process`
+    (systemd), `installed-apps` (dpkg/rpm/flatpak/snap), `perf-record` (perf),
+    and `terminal-config`.

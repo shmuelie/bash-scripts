@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# node-version — manage Node.js versions via nvm.sh. Ported from NvmHelpers.ps1
+# (Get/Install/Uninstall/Set-NodeVersion), re-targeted from nvm-windows.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/node/nvm-common.sh"
+
+usage() { cat <<'EOF'
+Usage: node-version <command> [args]
+
+Commands:
+  list                    List installed Node.js versions (nvm ls).
+  current                 Show the active version (nvm current).
+  available               List versions available to install (nvm ls-remote).
+  install <version>       Install a version (e.g. 22.11.0, node, lts/*).
+  uninstall <version>     Uninstall a version.
+  use <version>           Switch versions. NOTE: only affects the invoking
+                          process; for your shell, run `nvm use` directly.
+
+Use --latest with `use` to select the newest installed version.
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
+esac
+load_nvm
+
+case "$cmd" in
+    list) nvm ls ;;
+    current) nvm current ;;
+    available) nvm ls-remote ;;
+    install)
+        v="${1:-}"; [[ -n "$v" ]] || die 'install requires a version.'
+        should_process "nvm install $v" || exit 0
+        nvm install "$v" ;;
+    uninstall)
+        v="${1:-}"; [[ -n "$v" ]] || die 'uninstall requires a version.'
+        should_process "nvm uninstall $v" || exit 0
+        nvm uninstall "$v" ;;
+    use)
+        v="${1:-}"
+        [[ "$v" == "--latest" ]] && v='node'
+        [[ -n "$v" ]] || die 'use requires a version (or --latest).'
+        should_process "nvm use $v" || exit 0
+        nvm use "$v" ;;
+    *) die "Unknown command: $cmd (see --help)" ;;
+esac

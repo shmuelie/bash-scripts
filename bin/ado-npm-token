@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# ado-npm-token — refresh an Azure DevOps npm feed token via
+# @microsoft/artifacts-npm-credprovider. Ported from Update-AdoNpmToken.ps1.
+#
+# A child process cannot set the parent shell's environment, so this prints an
+# `export` line to stdout — evaluate it in your shell:
+#     eval "$(ado-npm-token --feed https://pkgs.dev.azure.com/org/_packaging/feed/npm/registry/)"
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+
+usage() { cat <<'EOF'
+Usage: ado-npm-token --feed <url> [--name VAR] [--force]
+
+Obtain a fresh Azure DevOps npm token and print an `export VAR=token` line.
+
+Options:
+  --feed <url>   The ADO npm feed registry URL (required).
+  --name VAR     Environment variable name (default: ADO_NPM_TOKEN).
+  --force        Force a credential refresh.
+EOF
+}
+
+feed=''; name='ADO_NPM_TOKEN'; force=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --feed) feed="$2"; shift 2 ;;
+        --name) name="$2"; shift 2 ;;
+        --force) force=1; shift ;;
+        *) die "Unknown option: $1" ;;
+    esac
+done
+
+[[ -n "$feed" ]] || { usage >&2; die '--feed is required.'; }
+[[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "Invalid variable name: $name"
+require_cmd npm
+require_cmd node
+
+npm_root="$(npm root -g 2>/dev/null || true)"
+[[ -n "$npm_root" ]] || die 'npm is not installed or not on PATH.'
+cred_provider="$npm_root/@microsoft/artifacts-npm-credprovider/bin/index.js"
+[[ -f "$cred_provider" ]] || die 'artifacts-npm-credprovider is not installed globally. Install: npm install -g @microsoft/artifacts-npm-credprovider'
+
+if ! should_process "Refresh token for feed $feed into $name"; then
+    exit 0
+fi
+
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+tmp_npmrc="$tmp_dir/.npmrc"
+# Seed the .npmrc with the feed entry so the credprovider writes the token in.
+feed_no_scheme="${feed#http://}"; feed_no_scheme="${feed_no_scheme#https://}"
+printf '//%s:_authToken=\n' "$feed_no_scheme" > "$tmp_npmrc"
+
+log_verbose "Requesting token for feed: $feed"
+node_args=(-c "$tmp_npmrc"); [[ "$force" == "1" ]] && node_args+=(--force)
+( cd "$tmp_dir" && node "$cred_provider" "${node_args[@]}" >&2 ) || true
+
+token="$(sed -n 's/.*:_authToken=\(.*\)$/\1/p' "$tmp_npmrc" | tr -d '[:space:]')"
+[[ -n "$token" ]] || die "Failed to obtain token for $name from artifacts-npm-credprovider."
+
+printf 'export %s=%q\n' "$name" "$token"
+log_verbose "$name updated successfully."

@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# service-process — resolve a systemd service to its hosting process.
+# Linux re-implementation of Get-ServiceProcess (which used Win32_Service on
+# Windows). Uses `systemctl show`.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+
+usage() { cat <<'EOF'
+Usage: service-process <service>... [--json] [--pid-only]
+
+Resolve one or more systemd services to their hosting process (MainPID).
+
+Options:
+  --json       Emit JSON objects.
+  --pid-only   Print just the PID (composes with kill).
+EOF
+}
+
+json=0; pid_only=0; services=()
+for a in "$@"; do
+    case "$a" in
+        -h|--help) usage; exit 0 ;;
+        --json) json=1 ;;
+        --pid-only) pid_only=1 ;;
+        *) services+=("$a") ;;
+    esac
+done
+[[ ${#services[@]} -gt 0 ]] || { usage >&2; die 'A service name is required.'; }
+require_cmd systemctl
+
+rows=()  # name state pid procname exe
+for svc in "${services[@]}"; do
+    unit="$svc"
+    [[ "$unit" == *.* ]] || unit="$unit.service"
+    if ! props="$(systemctl show "$unit" -p Id -p MainPID -p ActiveState -p SubState 2>/dev/null)"; then
+        log_error "No service matched '$svc'."; continue
+    fi
+    pid="$(sed -n 's/^MainPID=//p' <<< "$props")"
+    state="$(sed -n 's/^SubState=//p' <<< "$props")"
+    procname=''; exe=''
+    if [[ -n "$pid" && "$pid" != "0" ]]; then
+        procname="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
+        exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+    fi
+    rows+=("$unit"$'\t'"$state"$'\t'"${pid:-0}"$'\t'"$procname"$'\t'"$exe")
+done
+
+[[ ${#rows[@]} -eq 0 ]] && exit 1
+
+if [[ "$pid_only" == "1" ]]; then
+    for r in "${rows[@]}"; do
+        pid="$(printf '%s' "$r" | cut -f3)"
+        [[ "$pid" != "0" ]] && printf '%s\n' "$pid"
+    done
+elif [[ "$json" == "1" ]]; then
+    require_cmd jq
+    printf '%s\n' "${rows[@]}" | jq -R -s 'def nz: if .=="" then null else . end;
+        split("\n") | map(select(length>0) | split("\t") |
+        {name:.[0], state:.[1], processId:(.[2]|tonumber),
+         processName:(.[3]|nz), exe:(.[4]|nz)})'
+else
+    printf '%-30s %-10s %-8s %s\n' 'SERVICE' 'STATE' 'PID' 'PROCESS'
+    for r in "${rows[@]}"; do
+        IFS=$'\t' read -r name state pid procname exe <<< "$r"
+        printf '%-30s %-10s %-8s %s\n' "$name" "$state" "$pid" "$procname"
+    done
+fi

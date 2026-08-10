@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# npm-package — list and update npm packages. Ported from NpmHelpers.ps1
+# (Get/Update-NpmPackage).
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+
+usage() { cat <<'EOF'
+Usage: npm-package <command> [options]
+
+Commands:
+  list [--global] [--outdated] [--json]
+      List installed packages. --outdated shows only packages with updates.
+  update <name> [--global] [--dry-run]
+      Update a package. Global updates use `npm install -g <name>@latest`
+      (more reliable than `npm update -g` for scoped/private packages).
+      Reads names from stdin when none is given.
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
+esac
+require_cmd npm
+
+case "$cmd" in
+    list)
+        global=0; outdated=0; json=0
+        for a in "$@"; do
+            case "$a" in
+                --global|-g) global=1 ;;
+                --outdated) outdated=1 ;;
+                --json) json=1 ;;
+                *) die "Unknown option: $a" ;;
+            esac
+        done
+        require_cmd jq
+        if [[ "$outdated" == "1" ]]; then
+            args=(outdated --json); [[ "$global" == "1" ]] && args+=(--global)
+            raw="$(npm "${args[@]}" 2>/dev/null || true)"
+            [[ -z "$raw" || "$raw" == '{}' ]] && { [[ "$json" == "1" ]] && echo '[]'; exit 0; }
+            if [[ "$json" == "1" ]]; then
+                printf '%s' "$raw" | jq --argjson g "$([[ $global == 1 ]] && echo true || echo false)" \
+                    'to_entries | map({name:.key, version:.value.current, latest:.value.latest, global:$g})'
+            else
+                printf '%s' "$raw" | jq -r 'to_entries[] | "\(.key)\t\(.value.current // "")\t-> \(.value.latest)"' |
+                    while IFS=$'\t' read -r n c l; do printf '%-40s %-12s %s\n' "$n" "$c" "$l"; done
+            fi
+        else
+            args=(list --json --depth=0); [[ "$global" == "1" ]] && args+=(--global)
+            raw="$(npm "${args[@]}" 2>/dev/null || true)"
+            if [[ "$json" == "1" ]]; then
+                printf '%s' "$raw" | jq --argjson g "$([[ $global == 1 ]] && echo true || echo false)" \
+                    '(.dependencies // {}) | to_entries | map({name:.key, version:.value.version, global:$g})'
+            else
+                printf '%s' "$raw" | jq -r '(.dependencies // {}) | to_entries[] | "\(.key)\t\(.value.version // "")"' |
+                    while IFS=$'\t' read -r n v; do printf '%-40s %s\n' "$n" "$v"; done
+            fi
+        fi
+        ;;
+    update)
+        global=0; name=''
+        for a in "$@"; do
+            case "$a" in
+                --global|-g) global=1 ;;
+                --dry-run|--whatif) DRY_RUN=1 ;;
+                *) name="$a" ;;
+            esac
+        done
+        do_update() {
+            local n="$1"
+            [[ -n "$n" ]] || return 0
+            should_process "npm update $n$([[ $global == 1 ]] && echo ' (global)')" || return 0
+            if [[ "$global" == "1" ]]; then
+                npm install -g "$n@latest"
+            else
+                npm update "$n"
+            fi
+        }
+        if [[ -n "$name" ]]; then
+            do_update "$name"
+        elif [[ ! -t 0 ]]; then
+            while IFS= read -r line; do do_update "$line"; done
+        else
+            die 'update requires a package name (or piped names).'
+        fi
+        ;;
+    *) die "Unknown command: $cmd (see --help)" ;;
+esac

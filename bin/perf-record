@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# perf-record — start/stop a system performance recording. Linux
+# re-implementation of the WPR helpers (Start/Stop-WindowsPerformanceRecorder),
+# using `perf`. A single background `perf record` session is tracked via a state
+# file so start and stop mirror WPR's stateful model.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+
+STATE="${TMPDIR:-/tmp}/shm-perf-record.state"
+
+usage() { cat <<'EOF'
+Usage: perf-record start [-o file] [-- perf-record-args...]
+       perf-record stop
+
+start   Begin a system-wide recording (perf record -a -g). Default output is
+        perf.data in the current directory. Extra perf args go after `--`.
+stop    Finalize the active recording (sends SIGINT to perf so it writes data).
+
+Note: perf usually requires root or an adjusted perf_event_paranoid setting.
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
+esac
+require_cmd perf
+
+case "$cmd" in
+    start)
+        outfile="perf.data"; extra=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                -o) outfile="$2"; shift 2 ;;
+                --) shift; extra+=("$@"); break ;;
+                --dry-run|--whatif) DRY_RUN=1; shift ;;
+                *) extra+=("$1"); shift ;;
+            esac
+        done
+        if [[ -f "$STATE" ]] && kill -0 "$(cut -d' ' -f1 "$STATE" 2>/dev/null)" 2>/dev/null; then
+            die "A recording is already active (see $STATE). Run: perf-record stop"
+        fi
+        outfile="$(readlink -f "$outfile" 2>/dev/null || printf '%s/%s' "$(pwd -P)" "$outfile")"
+        should_process "Start perf recording to $outfile" || exit 0
+        perf record -a -g -o "$outfile" "${extra[@]}" >/dev/null 2>&1 &
+        pid=$!
+        printf '%s %s\n' "$pid" "$outfile" > "$STATE"
+        log_verbose "perf recording started (pid $pid) -> $outfile"
+        printf 'Recording to %s (pid %s). Run: perf-record stop\n' "$outfile" "$pid"
+        ;;
+    stop)
+        [[ -f "$STATE" ]] || die "No active recording (state file $STATE not found)."
+        read -r pid outfile < "$STATE"
+        should_process "Stop perf recording (pid $pid) -> $outfile" || exit 0
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -INT "$pid" 2>/dev/null || true
+            # Give perf time to flush the buffer to disk.
+            for _ in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+        fi
+        rm -f "$STATE"
+        printf 'Recording saved to %s\n' "$outfile"
+        ;;
+    *) die "Unknown command: $cmd (see --help)" ;;
+esac

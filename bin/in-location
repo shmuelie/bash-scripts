@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# in-location — run a command in a directory, returning to the original even on
+# error/interrupt. Ported from Invoke-InLocation.
+# Usage: in-location <dir> -- <command> [args...]
+#        in-location <dir> <command> [args...]
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+
+dir="${1:-}"; shift || true
+[[ -n "$dir" ]] || die 'Usage: in-location <dir> [--] <command> [args...]'
+[[ -d "$dir" ]] || die "Not a directory: $dir"
+[[ "${1:-}" == "--" ]] && shift
+[[ $# -gt 0 ]] || die 'A command is required.'
+
+orig="$(pwd -P)"
+cd "$dir"
+trap 'cd "$orig"' EXIT
+"$@"

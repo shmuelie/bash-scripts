@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# terminal-config — best-effort Linux stand-in for the Windows Terminal helpers
+# (Get-WindowsTerminalSettings / Get-WindowsTerminalProfile). Windows Terminal
+# has no Linux equivalent, so this reports the active terminal emulator and the
+# location of its configuration file when one is known.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+
+usage() { cat <<'EOF'
+Usage: terminal-config [--json]
+
+Report the current terminal emulator and, when known, the path to its config
+file. Windows Terminal has no Linux equivalent; this is a portability shim.
+EOF
+}
+
+json=0
+for a in "$@"; do
+    case "$a" in
+        -h|--help) usage; exit 0 ;;
+        --json) json=1 ;;
+        *) die "Unknown option: $a" ;;
+    esac
+done
+
+emulator="${TERM_PROGRAM:-${TERM:-unknown}}"
+config=''
+case "$emulator" in
+    *[Aa]lacritty*) for c in "$HOME/.config/alacritty/alacritty.toml" "$HOME/.config/alacritty/alacritty.yml"; do [[ -f "$c" ]] && config="$c" && break; done ;;
+    *[Kk]itty*)     [[ -f "$HOME/.config/kitty/kitty.conf" ]] && config="$HOME/.config/kitty/kitty.conf" ;;
+    *WezTerm*|*wezterm*) for c in "$HOME/.wezterm.lua" "$HOME/.config/wezterm/wezterm.lua"; do [[ -f "$c" ]] && config="$c" && break; done ;;
+    *foot*)         [[ -f "$HOME/.config/foot/foot.ini" ]] && config="$HOME/.config/foot/foot.ini" ;;
+    *) [[ -f "$HOME/.config/xfce4/terminal/terminalrc" ]] && config="$HOME/.config/xfce4/terminal/terminalrc" ;;
+esac
+
+if [[ "$json" == "1" ]]; then
+    require_cmd jq
+    jq -n --arg emulator "$emulator" --arg config "$config" \
+        '{emulator:$emulator, configPath:(if $config=="" then null else $config end)}'
+else
+    printf 'Emulator: %s\n' "$emulator"
+    if [[ -n "$config" ]]; then
+        printf 'Config:   %s\n' "$config"
+    else
+        printf 'Config:   (unknown for this emulator)\n'
+    fi
+fi

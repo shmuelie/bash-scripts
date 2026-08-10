@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# nvm-config — nvm.sh configuration and status. Re-targets the nvm-windows
+# proxy/mirror/root/version helpers from NvmHelpers.ps1 to nvm.sh equivalents.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/node/nvm-common.sh"
+
+usage() { cat <<'EOF'
+Usage: nvm-config <command> [args]
+
+Commands:
+  root                    Print the nvm directory ($NVM_DIR).
+  version                 Print the nvm version.
+  installed               Exit 0 if nvm.sh is installed, 1 otherwise.
+  deactivate              Deactivate nvm for the invoking process (nvm off).
+  node-mirror [url]       Show or print the export for the Node.js mirror
+                          (NVM_NODEJS_ORG_MIRROR).
+  npm-mirror [url]        Show or print the export for the io.js mirror
+                          (NVM_IOJS_ORG_MIRROR).
+
+nvm.sh has no persistent proxy/mirror config like nvm-windows; mirrors are
+environment variables. With a url, this prints an `export` line to eval.
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
+esac
+
+case "$cmd" in
+    root) nvm_dir ;;
+    version) load_nvm; nvm --version ;;
+    installed)
+        if nvm_installed; then echo "nvm installed at $(nvm_dir)"; exit 0
+        else log_warn "nvm not installed. See https://github.com/nvm-sh/nvm"; exit 1; fi ;;
+    deactivate) load_nvm; nvm deactivate ;;
+    node-mirror)
+        url="${1:-}"
+        if [[ -n "$url" ]]; then printf 'export NVM_NODEJS_ORG_MIRROR=%q\n' "$url"
+        else printf '%s\n' "${NVM_NODEJS_ORG_MIRROR:-https://nodejs.org/dist}"; fi ;;
+    npm-mirror)
+        url="${1:-}"
+        if [[ -n "$url" ]]; then printf 'export NVM_IOJS_ORG_MIRROR=%q\n' "$url"
+        else printf '%s\n' "${NVM_IOJS_ORG_MIRROR:-https://iojs.org/dist}"; fi ;;
+    *) die "Unknown command: $cmd (see --help)" ;;
+esac

@@ -28,8 +28,8 @@ export PATH="/path/to/bash-scripts/bin:$PATH"
 |---|---|---|
 | [Git](docs/git.md) | Ported | Worktrees, repo layout, status, sync, stale branches, completion |
 | [Copilot](docs/copilot.md) | Ported | Copilot CLI launcher, sessions, plugins, marketplaces, MCP |
-| Node | Planned | Node/nvm versions, npm packages, Azure DevOps npm credentials |
-| Utilities | Planned | .NET, Python, VS Code, terminal, services, diagnostics |
+| [Node](docs/node.md) | Ported | Node/nvm versions, npm packages, Azure DevOps npm credentials |
+| [Utilities](docs/utilities.md) | Ported | .NET, Python, VS Code, terminal, services, diagnostics |
 
 ## Conventions
 

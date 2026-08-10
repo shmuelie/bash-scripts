@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# uv-package — list and update uv packages in the system environment.
+# Ported from UvHelpers.ps1 (Get-UvPackages / Update-UvPackage).
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+
+usage() { cat <<'EOF'
+Usage: uv-package <command> [options]
+
+Commands:
+  list [--outdated] [--top-level] [--json]
+      List packages (uv pip list --system). --top-level keeps only packages
+      with no Required-by entry.
+  update <name> [--dry-run]
+      Upgrade a package (uv pip install --upgrade --system). Reads stdin too.
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
+esac
+require_cmd uv
+
+case "$cmd" in
+    list)
+        outdated=0; top=0; json=0
+        for a in "$@"; do
+            case "$a" in
+                --outdated) outdated=1 ;;
+                --top-level) top=1 ;;
+                --json) json=1 ;;
+                *) die "Unknown option: $a" ;;
+            esac
+        done
+        args=(pip list --no-progress --format json --system)
+        [[ "$outdated" == "1" ]] && args+=(--outdated)
+        out="$(uv "${args[@]}")"
+        require_cmd jq
+        if [[ "$top" == "1" ]]; then
+            # Keep only packages with an empty Required-by field.
+            filtered='[]'
+            while IFS= read -r pkg; do
+                [[ -z "$pkg" ]] && continue
+                if ! uv pip show "$pkg" --system 2>/dev/null | grep -qE '^Required-by:[[:space:]]+\S'; then
+                    filtered="$(printf '%s' "$filtered" | jq --arg p "$pkg" '. + [$p]')"
+                fi
+            done < <(printf '%s' "$out" | jq -r '.[].name')
+            out="$(printf '%s' "$out" | jq --argjson keep "$filtered" 'map(select(.name as $n | $keep | index($n)))')"
+        fi
+        if [[ "$json" == "1" ]]; then
+            printf '%s\n' "$out"
+        else
+            printf '%s' "$out" | jq -r '.[] | "\(.name)\t\(.version)\(if .latest_version then "\t-> "+.latest_version else "" end)"'
+        fi
+        ;;
+    update)
+        name=''
+        for a in "$@"; do
+            case "$a" in
+                --dry-run|--whatif) DRY_RUN=1 ;;
+                *) name="$a" ;;
+            esac
+        done
+        do_update() {
+            local n="$1"; [[ -n "$n" ]] || return 0
+            should_process "uv pip install --upgrade $n --system" || return 0
+            uv pip install --upgrade "$n" --system || log_warn "Failed to update: $n"
+        }
+        if [[ -n "$name" ]]; then do_update "$name"
+        elif [[ ! -t 0 ]]; then while IFS= read -r l; do do_update "$l"; done
+        else die 'update requires a package name (or piped names).'; fi
+        ;;
+    *) die "Unknown command: $cmd (see --help)" ;;
+esac

@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# dotnet-tool — manage .NET tools. Ported from DotNetHelpers.ps1
+# (Get/Install/Update/Uninstall-DotNetTool).
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+
+usage() { cat <<'EOF'
+Usage: dotnet-tool <command> [options]
+
+Commands:
+  list [pattern] [--local] [--json]   List installed tools (global by default).
+  install <package>                   Install a global tool (idempotent).
+  update <package> [--local] [--dry-run]
+                                      Update a tool. Reads names from stdin too.
+  uninstall <package> [--dry-run]     Uninstall a global tool.
+EOF
+}
+
+# parse_tool_list SCOPE — emit "packageId<TAB>version<TAB>commands" from
+# `dotnet tool list`. Run from $HOME so the local manifest isn't picked up
+# unexpectedly (mirrors Invoke-InLocation ~ in the original).
+parse_tool_list() {
+    local scope="$1"
+    ( cd "$HOME" && dotnet tool list "$scope" 2>/dev/null ) | tail -n +3 | while IFS= read -r line;
+    do
+        [[ -z "$line" ]] && continue
+        # Columns are separated by runs of 2+ spaces.
+        local pkg ver cmds
+        pkg="$(sed -E 's/[[:space:]]{2,}.*//' <<< "$line")"
+        rest="$(sed -E 's/^[^[:space:]]+[[:space:]]{2,}//' <<< "$line")"
+        ver="$(sed -E 's/[[:space:]]{2,}.*//' <<< "$rest")"
+        cmds="$(sed -E 's/^[^[:space:]]+[[:space:]]{2,}//' <<< "$rest")"
+        [[ -n "$pkg" ]] && printf '%s\t%s\t%s\n' "$pkg" "$ver" "$cmds"
+    done
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
+esac
+require_cmd dotnet
+
+case "$cmd" in
+    list)
+        pattern='*'; scope='-g'; json=0; is_global=1
+        for a in "$@"; do
+            case "$a" in
+                --local) scope='--local'; is_global=0 ;;
+                --json) json=1 ;;
+                *) pattern="$a" ;;
+            esac
+        done
+        rows=()
+        while IFS=$'\t' read -r pkg ver cmds; do
+            # shellcheck disable=SC2053
+            [[ "$pkg" == $pattern ]] && rows+=("$pkg"$'\t'"$ver"$'\t'"$cmds")
+        done < <(parse_tool_list "$scope")
+        if [[ "$json" == "1" ]]; then
+            require_cmd jq
+            if [[ ${#rows[@]} -eq 0 ]]; then echo '[]'; else
+                printf '%s\n' "${rows[@]}" | jq -R -s --argjson g "$([[ $is_global == 1 ]] && echo true || echo false)" \
+                    'split("\n") | map(select(length>0) | split("\t") |
+                    {packageId:.[0], version:.[1], commands:.[2], global:$g})'
+            fi
+        else
+            for r in "${rows[@]:-}"; do
+                [[ -z "$r" ]] && continue
+                IFS=$'\t' read -r pkg ver cmds <<< "$r"
+                printf '%-40s %-14s %s\n' "$pkg" "$ver" "$cmds"
+            done
+        fi
+        ;;
+    install)
+        name="${1:-}"; [[ -n "$name" ]] || die 'install requires a package id.'
+        should_process "dotnet tool install -g $name" || exit 0
+        if parse_tool_list '-g' | cut -f1 | grep -qix "$name"; then
+            log_verbose "Tool '$name' is already installed."
+            exit 0
+        fi
+        dotnet tool install -g "$name" || die "Failed to install tool: $name"
+        ;;
+    update)
+        name=''; scope='-g'
+        for a in "$@"; do
+            case "$a" in
+                --local) scope='--local' ;;
+                --dry-run|--whatif) DRY_RUN=1 ;;
+                *) name="$a" ;;
+            esac
+        done
+        do_update() {
+            local n="$1"; [[ -n "$n" ]] || return 0
+            should_process "dotnet tool update $n" || return 0
+            dotnet tool update "$n" "$scope" || log_warn "Failed to update tool: $n"
+        }
+        if [[ -n "$name" ]]; then do_update "$name"
+        elif [[ ! -t 0 ]]; then while IFS= read -r l; do do_update "$l"; done
+        else die 'update requires a package id (or piped names).'; fi
+        ;;
+    uninstall)
+        name="${1:-}"; [[ "$name" == "--dry-run" || "$name" == "--whatif" ]] && { DRY_RUN=1; name="${2:-}"; }
+        [[ -n "$name" ]] || die 'uninstall requires a package id.'
+        should_process "dotnet tool uninstall -g $name" || exit 0
+        dotnet tool uninstall -g "$name" || die "Failed to uninstall tool: $name"
+        ;;
+    *) die "Unknown command: $cmd (see --help)" ;;
+esac

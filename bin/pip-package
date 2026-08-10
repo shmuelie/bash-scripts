@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# pip-package — list and update pip packages. Ported from PythonHelpers.ps1
+# (Get-PipPackages / Update-PipPackage).
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+
+usage() { cat <<'EOF'
+Usage: pip-package <command> [options]
+
+Commands:
+  list [--user] [--state any|outdated|uptodate] [--top-level] [--json]
+      List installed pip packages (pip list --format json).
+  update <name> [--dry-run]
+      Upgrade a package (pip install --upgrade). Reads names from stdin too.
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
+esac
+require_cmd pip
+
+case "$cmd" in
+    list)
+        user=0; state='any'; top=0; json=0
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --user) user=1; shift ;;
+                --state) state="$2"; shift 2 ;;
+                --top-level) top=1; shift ;;
+                --json) json=1; shift ;;
+                *) die "Unknown option: $1" ;;
+            esac
+        done
+        args=(list --format json --disable-pip-version-check)
+        [[ "$user" == "1" ]] && args+=(--user)
+        [[ "$top" == "1" ]] && args+=(--not-required)
+        case "$state" in
+            outdated) args+=(--outdated) ;;
+            uptodate) args+=(--uptodate) ;;
+            any) ;;
+            *) die "Invalid state: $state (any|outdated|uptodate)" ;;
+        esac
+        out="$(pip "${args[@]}")"
+        if [[ "$json" == "1" ]]; then
+            printf '%s\n' "$out"
+        else
+            require_cmd jq
+            printf '%s' "$out" | jq -r '.[] | "\(.name)\t\(.version)\(if .latest_version then "\t-> "+.latest_version else "" end)"'
+        fi
+        ;;
+    update)
+        name=''
+        for a in "$@"; do
+            case "$a" in
+                --dry-run|--whatif) DRY_RUN=1 ;;
+                *) name="$a" ;;
+            esac
+        done
+        do_update() {
+            local n="$1"; [[ -n "$n" ]] || return 0
+            should_process "pip install --upgrade $n" || return 0
+            pip install --upgrade "$n" || log_warn "Failed to update: $n"
+        }
+        if [[ -n "$name" ]]; then do_update "$name"
+        elif [[ ! -t 0 ]]; then while IFS= read -r l; do do_update "$l"; done
+        else die 'update requires a package name (or piped names).'; fi
+        ;;
+    *) die "Unknown command: $cmd (see --help)" ;;
+esac

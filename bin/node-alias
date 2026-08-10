@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# node-alias — manage Node.js version aliases via nvm.sh.
+# Ported from NvmHelpers.ps1 (Set/Remove-NodeAlias).
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/node/nvm-common.sh"
+
+usage() { cat <<'EOF'
+Usage: node-alias <command> [args]
+
+Commands:
+  set <name> <version>   Create an alias for a version (nvm alias).
+  remove <name>          Remove an alias (nvm unalias).
+  list                   List aliases (nvm alias).
+EOF
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
+esac
+load_nvm
+
+case "$cmd" in
+    set)
+        name="${1:-}"; version="${2:-}"
+        [[ -n "$name" && -n "$version" ]] || die 'set requires <name> and <version>.'
+        should_process "nvm alias $name -> $version" || exit 0
+        nvm alias "$name" "$version" ;;
+    remove)
+        name="${1:-}"; [[ -n "$name" ]] || die 'remove requires an alias name.'
+        should_process "nvm unalias $name" || exit 0
+        nvm unalias "$name" ;;
+    list) nvm alias ;;
+    *) die "Unknown command: $cmd (see --help)" ;;
+esac

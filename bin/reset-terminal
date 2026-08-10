@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# reset-terminal — reset DEC private modes and kitty keyboard flags after a
+# crashed TUI. Ported from Reset-TerminalModes. No-op when stdout is redirected.
+set -euo pipefail
+[[ -t 1 ]] || exit 0
+printf '\033[?2026;2004;1049;1006;1004;1003;1000l\033[=0u'

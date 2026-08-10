@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# installed-apps — list installed applications. Linux re-implementation of
+# Get-InstalledApplications (which read the Windows registry). Aggregates dpkg,
+# rpm, flatpak, and snap.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+
+usage() { cat <<'EOF'
+Usage: installed-apps [--source dpkg|rpm|flatpak|snap] [--json]
+
+List installed applications from available package managers (dpkg, rpm,
+flatpak, snap). Without --source, queries every available manager.
+EOF
+}
+
+source_filter=''; json=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --source) source_filter="$2"; shift 2 ;;
+        --json) json=1; shift ;;
+        *) die "Unknown option: $1" ;;
+    esac
+done
+
+rows=()  # name version source
+
+want() { [[ -z "$source_filter" || "$source_filter" == "$1" ]]; }
+
+if want dpkg && have_cmd dpkg-query; then
+    while IFS=$'\t' read -r n v; do
+        [[ -n "$n" ]] && rows+=("$n"$'\t'"$v"$'\t'dpkg)
+    done < <(dpkg-query -W -f='${Package}\t${Version}\n' 2>/dev/null)
+fi
+if want rpm && have_cmd rpm; then
+    while IFS=$'\t' read -r n v; do
+        [[ -n "$n" ]] && rows+=("$n"$'\t'"$v"$'\t'rpm)
+    done < <(rpm -qa --qf '%{NAME}\t%{VERSION}\n' 2>/dev/null)
+fi
+if want flatpak && have_cmd flatpak; then
+    while IFS=$'\t' read -r n v; do
+        [[ -n "$n" ]] && rows+=("$n"$'\t'"$v"$'\t'flatpak)
+    done < <(flatpak list --columns=application,version 2>/dev/null)
+fi
+if want snap && have_cmd snap; then
+    while read -r n v _; do
+        [[ -n "$n" && "$n" != "Name" ]] && rows+=("$n"$'\t'"$v"$'\t'snap)
+    done < <(snap list 2>/dev/null)
+fi
+
+if [[ "$json" == "1" ]]; then
+    require_cmd jq
+    if [[ ${#rows[@]} -eq 0 ]]; then echo '[]'; else
+        printf '%s\n' "${rows[@]}" | jq -R -s 'split("\n") | map(select(length>0) |
+            split("\t") | {name:.[0], version:.[1], source:.[2]})'
+    fi
+else
+    for r in "${rows[@]:-}"; do
+        [[ -z "$r" ]] && continue
+        IFS=$'\t' read -r n v s <<< "$r"
+        printf '%-40s %-20s %s\n' "$n" "$v" "$s"
+    done
+fi

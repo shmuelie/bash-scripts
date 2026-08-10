@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# vscode-chat — start a VS Code chat session. Ported from Start-VsCodeChat as a
+# wrapper over `code chat` (forwards --mode, --add-file, the prompt, and the rest).
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+require_cmd code
+exec code chat "$@"

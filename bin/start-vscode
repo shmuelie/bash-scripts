@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# start-vscode — open VS Code. Ported from Start-VsCode as a thin wrapper that
+# forwards all arguments to `code` (paths, --profile, --reuse-window, --diff, ...).
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+require_cmd code
+exec code "$@"
