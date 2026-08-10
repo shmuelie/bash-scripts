@@ -9,11 +9,13 @@ if ! command -v shellcheck >/dev/null 2>&1; then
     exit 1
 fi
 
-# Collect bin executables, libraries, and completions.
+# Collect bin executables, libraries, completions, build scripts, and installer.
 mapfile -t targets < <(
     find bin -type f 2>/dev/null
     find lib -type f -name '*.sh' 2>/dev/null
     find completions/bash -type f -name '*.bash' 2>/dev/null
+    find build -type f -name '*.sh' 2>/dev/null
+    [ -f install.sh ] && printf '%s\n' install.sh
 )
 
 echo "Linting ${#targets[@]} scripts with shellcheck..."

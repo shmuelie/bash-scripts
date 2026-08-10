@@ -18,7 +18,32 @@ build/        Lint, public-content scan, and test runner
 test/         bats-core test suites
 ```
 
-Add `bin/` to your `PATH`:
+## Install
+
+Quick install (clones to `~/.local/share/bash-scripts`, symlinks the commands
+into `~/.local/bin`, and wires up completions):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shmuelie/bash-scripts/main/install.sh | bash
+```
+
+Or from a clone:
+
+```bash
+git clone https://github.com/shmuelie/bash-scripts.git
+cd bash-scripts
+./install.sh                 # symlink bin/* into ~/.local/bin (default)
+./install.sh --method path   # add <repo>/bin to your shell rc instead
+./install.sh --uninstall     # remove whatever the installer added
+```
+
+`install.sh` options: `--prefix DIR` (symlink target, default `~/.local/bin`),
+`--rc FILE` (shell rc to edit), `--no-completions`, `--uninstall`. Re-running is
+idempotent, and `--uninstall` cleanly removes the symlinks and the rc block.
+
+Manual install — just add `bin/` to your `PATH` (the commands self-locate `lib/`,
+so you can also symlink individual `bin/*` onto your `PATH`, but never copy them
+away from the repo on their own):
 
 ```bash
 export PATH="/path/to/bash-scripts/bin:$PATH"
