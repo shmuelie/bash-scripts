@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# git-stale-branch — find local branches whose remote branch no longer exists.
+# Ported from Find-StaleBranch. Emits one branch name per line (with optional
+# worktree path and PR status columns), suitable for piping to git-worktree-remove.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { cat <<'EOF'
+Usage: git-stale-branch [options]
+
+List local branches whose upstream is gone or missing from the remote
+(e.g. after a merged/abandoned PR).
+
+Options:
+  --remote <name>     Remote to check (default: origin).
+  --user <name>       Filter to user/<name>/* branches (default: git user).
+  --all               Include all branches, not just the user's.
+  --include-pr-status Query Azure DevOps PR status via `az` (slower).
+  --json              Emit JSON.
+EOF
+}
+
+remote='origin'; user=''; all=0; include_pr=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --remote) remote="$2"; shift 2 ;;
+        --user) user="$2"; shift 2 ;;
+        --all) all=1; shift ;;
+        --include-pr-status) include_pr=1; shift ;;
+        --json) JSON=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *) die "Unexpected argument: $1" ;;
+    esac
+done
+
+require_cmd git
+[[ "$JSON" == "1" ]] && require_cmd jq
+
+# Determine user filter.
+if [[ "$all" == "0" && -z "$user" ]]; then
+    email="$(git config user.email 2>/dev/null || true)"
+    [[ "$email" =~ ^([^@]+)@ ]] && user="${BASH_REMATCH[1]}"
+fi
+user_prefix=''
+[[ "$all" == "0" && -n "$user" ]] && user_prefix="user/$user/"
+
+# Collect candidate branches (no upstream, or upstream [gone]).
+candidates=()
+while IFS='|' read -r branch upstream track; do
+    [[ -z "$branch" ]] && continue
+    if [[ -n "$upstream" && "$track" != '[gone]' ]]; then continue; fi
+    if [[ -n "$user_prefix" && "$branch" != "$user_prefix"* ]]; then continue; fi
+    candidates+=("$branch")
+done < <(git --no-pager for-each-ref --format='%(refname:short)|%(upstream:short)|%(upstream:track)' refs/heads/ 2>/dev/null) \
+    || die "Not a git repository (or git failed) in '$(pwd)'."
+
+[[ ${#candidates[@]} -eq 0 ]] && { [[ "$JSON" == "1" ]] && echo '[]'; exit 0; }
+
+# Batch-fetch remote refs matching the prefix.
+declare -A remote_refs=()
+ls_filter='refs/heads/*'
+[[ -n "$user_prefix" ]] && ls_filter="refs/heads/$user_prefix*"
+while IFS= read -r ref_line; do
+    ref_branch="${ref_line#*$'\t'refs/heads/}"
+    [[ "$ref_branch" != "$ref_line" ]] && remote_refs["$ref_branch"]=1
+done < <(git --no-pager ls-remote --heads "$remote" "$ls_filter" 2>/dev/null)
+
+# Build worktree path lookup.
+declare -A worktree_paths=()
+while IFS=$'\t' read -r wt_path _ wt_branch; do
+    [[ -n "$wt_branch" ]] && worktree_paths["$wt_branch"]="$wt_path"
+done < <(git_worktrees)
+
+# ADO context for optional PR lookups.
+ado_org=''; ado_project=''; ado_repo=''
+if [[ "$include_pr" == "1" ]]; then
+    git_url="$(git config --get "remote.$remote.url" 2>/dev/null || true)"
+    if [[ "$git_url" =~ dev\.azure\.com/([^/]+)/([^/]+)/_git/(.+)$ ]]; then
+        ado_org="https://dev.azure.com/${BASH_REMATCH[1]}"; ado_project="${BASH_REMATCH[2]}"; ado_repo="${BASH_REMATCH[3]}"
+    elif [[ "$git_url" =~ ([^/]+)\.visualstudio\.com/(DefaultCollection/)?([^/]+)/_git/(.+)$ ]]; then
+        ado_org="https://dev.azure.com/${BASH_REMATCH[1]}"; ado_project="${BASH_REMATCH[3]}"; ado_repo="${BASH_REMATCH[4]}"
+    fi
+fi
+
+results=()  # BRANCH<TAB>PATH<TAB>PRSTATUS<TAB>PRID<TAB>PRTITLE
+for branch in "${candidates[@]}"; do
+    [[ -n "${remote_refs[$branch]:-}" ]] && continue
+    path="${worktree_paths[$branch]:-}"
+    pr_status=''; pr_id=''; pr_title=''
+    if [[ "$include_pr" == "1" && -n "$ado_org" ]] && have_cmd az; then
+        pr_json="$(az repos pr list --source-branch "$branch" --status all \
+            --repository "$ado_repo" --project "$ado_project" --org "$ado_org" \
+            --query '[0].{id:pullRequestId,title:title,status:status}' -o json 2>/dev/null || true)"
+        if [[ -n "$pr_json" && "$pr_json" != 'null' ]]; then
+            pr_status="$(printf '%s' "$pr_json" | jq -r '.status // empty')"
+            pr_id="$(printf '%s' "$pr_json" | jq -r '.id // empty')"
+            pr_title="$(printf '%s' "$pr_json" | jq -r '.title // empty')"
+        fi
+    fi
+    results+=("$branch"$'\t'"$path"$'\t'"$pr_status"$'\t'"$pr_id"$'\t'"$pr_title")
+done
+
+if [[ "$JSON" == "1" ]]; then
+    if [[ ${#results[@]} -eq 0 ]]; then echo '[]'; else
+        printf '%s\n' "${results[@]}" | jq -R -s 'def nz: if .=="" then null else . end;
+            split("\n") | map(select(length>0) |
+            split("\t") | {branch:.[0], path:(.[1]|nz), existsOnRemote:false,
+            prStatus:(.[2]|nz), prId:(.[3]|nz), prTitle:(.[4]|nz)})'
+    fi
+else
+    for r in "${results[@]}"; do
+        printf '%s\n' "$(printf '%s' "$r" | cut -f1)"
+    done
+fi

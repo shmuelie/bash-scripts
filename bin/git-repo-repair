@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# git-repo-repair — conform clones/worktrees to <root>/<org>/<repo>/<branch>.
+# Ported from Repair-RepositoryLayout. Emits one result line per repository:
+#   REPO<TAB>CATEGORY<TAB>ACTION<TAB>FROM<TAB>TO<TAB>STATUS
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { cat <<'EOF'
+Usage: git-repo-repair [options]
+
+Scan repositories under the repos root and move any that don't follow the
+standard <root>/<org>/<repo>/<branch> layout into place. Detached HEADs and
+non-git directories are reported only, never modified.
+
+Options:
+  --root <dir>        Repos root (default: $SOURCE_REPOS).
+  --org <glob>        Only process organizations matching this glob.
+  --name <glob>       Only process repositories matching this glob.
+  --json              Emit JSON.
+  --dry-run, --whatif Preview the From->To plan without moving.
+  -v, --verbose       Verbose output.
+EOF
+}
+
+root=''; org_filter=''; name_filter=''
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --root) root="$2"; shift 2 ;;
+        --org) org_filter="$2"; shift 2 ;;
+        --name) name_filter="$2"; shift 2 ;;
+        --json) JSON=1; shift ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        -v|--verbose) VERBOSE=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *) die "Unexpected argument: $1" ;;
+    esac
+done
+
+require_cmd git
+[[ "$JSON" == "1" ]] && require_cmd jq
+
+root="${root:-${SOURCE_REPOS:-}}"
+[[ -n "$root" ]] || die 'No repository root specified. Pass --root or set SOURCE_REPOS.'
+[[ -d "$root" ]] || die "Repos root not found: $root"
+
+cwd="$(pwd -P)"
+results=()
+emit() { results+=("$1"$'\t'"$2"$'\t'"$3"$'\t'"$4"$'\t'"$5"$'\t'"$6"); }
+
+for org_dir in "$root"/*/; do
+    [[ -d "$org_dir" ]] || continue
+    org_name="$(basename -- "$org_dir")"
+    # shellcheck disable=SC2053  # intentional glob match, mirrors PowerShell -like
+    if [[ -n "$org_filter" && "$org_name" != $org_filter ]]; then continue; fi
+
+    for repo_dir in "$org_dir"*/; do
+        [[ -d "$repo_dir" ]] || continue
+        repo_dir="${repo_dir%/}"
+        repo_name="$(basename -- "$repo_dir")"
+        # shellcheck disable=SC2053  # intentional glob match, mirrors PowerShell -like
+        if [[ -n "$name_filter" && "$repo_name" != $name_filter ]]; then continue; fi
+        repo_rel="$org_name/$repo_name"
+
+        # --- Category 1: .git directly at repo level (no branch dir) ---
+        if [[ -e "$repo_dir/.git" ]]; then
+            branch="$(git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+            if [[ -z "$branch" || "$branch" == 'HEAD' ]]; then
+                emit "$repo_rel" 'git-at-repo-level' 'none' "$repo_dir" '' 'Skipped-Detached'; continue
+            fi
+            if [[ "$cwd" == "$repo_dir" || "$cwd" == "$repo_dir/"* ]]; then
+                emit "$repo_rel" 'git-at-repo-level' 'none' "$repo_dir" '' 'Skipped-CwdInside'; continue
+            fi
+            wt_count="$(git -C "$repo_dir" worktree list 2>/dev/null | wc -l)"
+            if [[ "$wt_count" -gt 1 ]]; then
+                emit "$repo_rel" 'git-at-repo-level' 'none' "$repo_dir" '' 'Skipped-HasWorktrees'; continue
+            fi
+            target="$repo_dir/$branch"
+            if ! should_process "Move clone into '$branch' subdirectory"; then
+                emit "$repo_rel" 'git-at-repo-level' 'would-move' "$repo_dir" "$target" 'WhatIf'; continue
+            fi
+            tmp="$org_dir$repo_name.__layout_tmp_$RANDOM"
+            if mv -- "$repo_dir" "$tmp" 2>/dev/null && mkdir -p "$(dirname -- "$target")" && mv -- "$tmp" "$target" 2>/dev/null; then
+                emit "$repo_rel" 'git-at-repo-level' 'moved' "$repo_dir" "$target" 'Converted'
+            else
+                emit "$repo_rel" 'git-at-repo-level' 'move-failed' "$repo_dir" "$target" 'Error'
+            fi
+            continue
+        fi
+
+        # --- Category 2/3: branch-level working trees ---
+        mapfile -t git_items < <(find "$repo_dir" -maxdepth 5 -name '.git' 2>/dev/null | grep -v '/\.git/' || true)
+        if [[ ${#git_items[@]} -eq 0 ]]; then
+            emit "$repo_rel" 'no-git' 'none' "$repo_dir" '' 'Skipped-NoGit'; continue
+        fi
+
+        for g in "${git_items[@]}"; do
+            wt="$(dirname -- "$g")"
+            [[ -n "$wt" ]] || continue
+            super="$(git -C "$wt" rev-parse --show-superproject-working-tree 2>/dev/null || true)"
+            if [[ -n "$super" ]]; then
+                emit "$repo_rel" 'submodule' 'none' "$wt" '' 'Skipped-Submodule'; continue
+            fi
+            common_dir="$(git -C "$wt" rev-parse --git-common-dir 2>/dev/null || true)"
+            if [[ -n "$common_dir" ]]; then
+                common_full="$common_dir"
+                [[ "$common_full" != /* ]] && common_full="$wt/$common_dir"
+                common_full="$(_shm_fullpath "$common_full")"
+                if [[ "$common_full" != "$repo_dir"* ]]; then
+                    emit "$repo_rel" 'foreign-nested' 'none' "$wt" '' 'Skipped-ForeignClone'; continue
+                fi
+            fi
+            rel="${wt#"$repo_dir"}"; rel="${rel#/}"
+            branch="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+            if [[ -z "$branch" || "$branch" == 'HEAD' ]]; then
+                emit "$repo_rel" 'detached' 'none' "$wt" '' 'Skipped-Detached'; continue
+            fi
+            branch_dir="$branch"
+            [[ "$rel" == "$branch_dir" ]] && continue  # conforms
+            target="$repo_dir/$branch_dir"
+
+            # Linked worktree if .git is a file; main clone if a directory.
+            if [[ -f "$g" ]]; then is_linked=1; else is_linked=0; fi
+            if [[ "$cwd" == "$wt" || "$cwd" == "$wt/"* ]]; then
+                emit "$repo_rel" 'leaf-not-branch' 'none' "$wt" "$target" 'Skipped-CwdInside'; continue
+            fi
+
+            if [[ "$is_linked" == "1" ]]; then
+                if ! should_process "git worktree move -> '$branch_dir'"; then
+                    emit "$repo_rel" 'leaf-not-branch' 'would-worktree-move' "$wt" "$target" 'WhatIf'; continue
+                fi
+                mkdir -p "$(dirname -- "$target")"
+                if git -C "$wt" worktree move "$wt" "$target" >/dev/null 2>&1; then
+                    emit "$repo_rel" 'leaf-not-branch' 'worktree-move' "$wt" "$target" 'Converted'
+                else
+                    emit "$repo_rel" 'leaf-not-branch' 'worktree-move-failed' "$wt" "$target" 'Error'
+                fi
+            else
+                wt_count="$(git -C "$wt" worktree list 2>/dev/null | wc -l)"
+                if [[ "$wt_count" -gt 1 ]]; then
+                    emit "$repo_rel" 'leaf-not-branch' 'none' "$wt" "$target" 'Skipped-HasWorktrees'; continue
+                fi
+                if ! should_process "Rename main clone dir -> '$branch_dir'"; then
+                    emit "$repo_rel" 'leaf-not-branch' 'would-rename' "$wt" "$target" 'WhatIf'; continue
+                fi
+                mkdir -p "$(dirname -- "$target")"
+                if mv -- "$wt" "$target" 2>/dev/null; then
+                    emit "$repo_rel" 'leaf-not-branch' 'renamed' "$wt" "$target" 'Converted'
+                else
+                    emit "$repo_rel" 'leaf-not-branch' 'rename-failed' "$wt" "$target" 'Error'
+                fi
+            fi
+        done
+    done
+done
+
+if [[ "$JSON" == "1" ]]; then
+    if [[ ${#results[@]} -eq 0 ]]; then echo '[]'; else
+        printf '%s\n' "${results[@]}" | jq -R -s 'def nz: if .=="" then null else . end;
+            split("\n") | map(select(length>0) |
+            split("\t") | {repo:.[0], category:.[1], action:.[2],
+            from:(.[3]|nz), to:(.[4]|nz), status:.[5]})'
+    fi
+else
+    if [[ ${#results[@]} -gt 0 ]]; then
+        printf '%-30s %-18s %-20s %s\n' 'REPO' 'CATEGORY' 'ACTION' 'STATUS'
+        for r in "${results[@]}"; do
+            IFS=$'\t' read -r repo cat action _ _ status <<< "$r"
+            printf '%-30s %-18s %-20s %s\n' "$repo" "$cat" "$action" "$status"
+        done
+    fi
+fi

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# git-worktree-switch — resolve a worktree by branch name and print its path.
+# Ported from Set-Worktree. Since a child process cannot change the parent
+# shell's directory, this prints the path; use: cd "$(git-worktree-switch main)".
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { cat <<'EOF'
+Usage: git-worktree-switch <branch>
+
+Print the path of the worktree for <branch>. Use with cd:
+    cd "$(git-worktree-switch main)"
+EOF
+}
+
+case "${1:-}" in
+    -h|--help|'') usage; [[ -n "${1:-}" ]] && exit 0 || exit 2 ;;
+esac
+
+require_cmd git
+branch="$1"
+path=''
+while IFS=$'\t' read -r wt_path _ wt_branch; do
+    if [[ "$wt_branch" == "$branch" ]]; then
+        path="$wt_path"
+        break
+    fi
+done < <(git_worktrees)
+
+if [[ -n "$path" && -d "$path" ]]; then
+    printf '%s\n' "$path"
+else
+    die "No worktree found for branch '$branch'."
+fi

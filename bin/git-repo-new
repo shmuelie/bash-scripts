@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# git-repo-new — clone a repository into the standard worktree-ready layout
+# <root>/<org>/<repo>/<branch>. Ported from New-Repository.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { cat <<'EOF'
+Usage: git-repo-new [options] <url>
+
+Clone a GitHub or Azure DevOps repository into <root>/<org>/<repo>/<branch>.
+Prints the target path on success (use with cd).
+
+Options:
+  --root <dir>            Repos root (default: $SOURCE_REPOS).
+  --org <name>            Override the auto-detected organization/owner.
+  --name <name>           Override the auto-detected repository name.
+  --branch <name>         Branch to clone (default: remote default branch).
+  --no-recurse-submodules Do not initialize submodules recursively.
+  --shallow               Blobless partial clone (--filter=blob:none).
+  --dry-run, --whatif     Preview without cloning.
+  -v, --verbose           Verbose output.
+EOF
+}
+
+url=''; root=''; org=''; name=''; branch=''; recurse=1; shallow=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --root) root="$2"; shift 2 ;;
+        --org) org="$2"; shift 2 ;;
+        --name) name="$2"; shift 2 ;;
+        --branch) branch="$2"; shift 2 ;;
+        --no-recurse-submodules) recurse=0; shift ;;
+        --shallow) shallow=1; shift ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        -v|--verbose) VERBOSE=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *) url="$1"; shift ;;
+    esac
+done
+
+[[ -n "$url" ]] || { usage >&2; die 'url is required.'; }
+require_cmd git
+
+# Parse org and repo name from the URL when not provided.
+if [[ -z "$name" || -z "$org" ]]; then
+    if [[ "$url" =~ dev\.azure\.com/([^/]+)/[^/]+/_git/([^/?]+) ]]; then
+        [[ -z "$org" ]] && org="${BASH_REMATCH[1]}"
+        [[ -z "$name" ]] && name="${BASH_REMATCH[2]%.git}"
+    elif [[ "$url" =~ ([^/]+)\.visualstudio\.com(/DefaultCollection)?/[^/]+/_git/([^/?]+) ]]; then
+        [[ -z "$org" ]] && org="${BASH_REMATCH[1]}"
+        [[ -z "$name" ]] && name="${BASH_REMATCH[3]%.git}"
+    elif [[ "$url" =~ vs-ssh\.visualstudio\.com:v3/([^/]+)/[^/]+/([^/?]+) ]]; then
+        [[ -z "$org" ]] && org="${BASH_REMATCH[1]}"
+        [[ -z "$name" ]] && name="${BASH_REMATCH[2]%.git}"
+    elif [[ "$url" =~ ^https?://[^/]+/([^/]+)/([^/?]+) ]]; then
+        [[ -z "$org" ]] && org="${BASH_REMATCH[1]}"
+        [[ -z "$name" ]] && name="${BASH_REMATCH[2]%.git}"
+    elif [[ "$url" =~ ^git@[^:]+:([^/]+)/([^/?]+) ]]; then
+        [[ -z "$org" ]] && org="${BASH_REMATCH[1]}"
+        [[ -z "$name" ]] && name="${BASH_REMATCH[2]%.git}"
+    fi
+    if [[ -z "$org" || -z "$name" ]]; then
+        die "Unable to parse org and repo name from URL: $url. Use --org and --name."
+    fi
+fi
+
+repos_root="${root:-${SOURCE_REPOS:-}}"
+[[ -n "$repos_root" ]] || die 'No repository root specified. Pass --root or set SOURCE_REPOS.'
+
+# Determine the branch directory name.
+if [[ -n "$branch" ]]; then
+    branch_dir="$branch"
+else
+    remote_branch="$(git ls-remote --symref "$url" HEAD 2>/dev/null | sed -n 's#^ref: refs/heads/\([^[:space:]]*\)[[:space:]]*HEAD#\1#p' | head -n1)"
+    if [[ -z "$remote_branch" ]]; then
+        branch_dir='main'
+        log_warn "Could not detect default branch, using 'main'."
+    else
+        branch_dir="$remote_branch"
+    fi
+fi
+
+target_path="$repos_root/$org/$name/$branch_dir"
+[[ -e "$target_path" ]] && die "Target path already exists: $target_path"
+
+clone_args=(clone "$url")
+[[ -n "$branch" ]] && clone_args+=(--branch "$branch")
+[[ "$recurse" == "1" ]] && clone_args+=(--recurse-submodules)
+[[ "$shallow" == "1" ]] && clone_args+=(--filter=blob:none)
+clone_args+=("$target_path")
+
+if ! should_process "Clone $org/$name into $target_path"; then
+    exit 0
+fi
+
+mkdir -p "$(dirname -- "$target_path")"
+log_verbose "Cloning $org/$name into $target_path"
+git "${clone_args[@]}" >&2 || die "git clone failed."
+printf '%s\n' "$target_path"

@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# git-worktree-list — list worktrees for the current repository.
+# Ported from Get-Worktrees. Outputs a table by default, JSON with --json.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { cat <<'EOF'
+Usage: git-worktree-list [--json]
+
+List all worktrees for the current repository (path, commit, branch).
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help) usage; exit 0 ;;
+        --json) JSON=1 ;;
+        *) die "Unknown argument: $arg" ;;
+    esac
+done
+
+require_cmd git
+
+if [[ "$JSON" == "1" ]]; then
+    require_cmd jq
+    git_worktrees | jq -R -s 'split("\n") | map(select(length>0) | split("\t") |
+        {path: .[0], commit: .[1], branch: .[2]})'
+else
+    printf '%-60s %-12s %s\n' 'PATH' 'COMMIT' 'BRANCH'
+    while IFS=$'\t' read -r path commit branch; do
+        printf '%-60s %-12s %s\n' "$path" "${commit:0:12}" "$branch"
+    done < <(git_worktrees)
+fi

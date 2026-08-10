@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# git-worktree-root — show the root (main) worktree path for the repository.
+# Ported from Get-RootWorktree.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+case "${1:-}" in
+    -h|--help) echo 'Usage: git-worktree-root'; exit 0 ;;
+esac
+
+require_cmd git
+line="$(git_root_worktree)" || exit 1
+printf '%s\n' "$(printf '%s' "$line" | cut -f1)"

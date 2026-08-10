@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# git-sync — fetch remotes with pruning, reporting ref changes.
+# Ported from Sync-GitRemote. Sets tracking config on orphaned local branches
+# after a prune so [gone] detection works downstream.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { cat <<'EOF'
+Usage: git-sync [options] [remote]
+
+Fetch from all remotes (or a specific [remote]) with pruning and report
+new/updated/deleted/forced refs.
+
+Options:
+  --no-prune          Do not prune deleted remote-tracking refs.
+  --json              Emit JSON results.
+  --dry-run, --whatif Preview without fetching.
+  -v, --verbose       Verbose output.
+EOF
+}
+
+no_prune=0; remote=''
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --no-prune) no_prune=1; shift ;;
+        --json) JSON=1; shift ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        -v|--verbose) VERBOSE=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *) remote="$1"; shift ;;
+    esac
+done
+
+require_cmd git
+[[ "$JSON" == "1" ]] && require_cmd jq
+
+fetch_args=(fetch)
+if [[ -n "$remote" ]]; then
+    fetch_args+=("$remote")
+else
+    fetch_args+=(--all)
+fi
+[[ "$no_prune" == "0" ]] && fetch_args+=(--prune)
+
+target="all remotes"
+[[ -n "$remote" ]] && target="remote '$remote'"
+if ! should_process "git fetch ($target)"; then
+    exit 0
+fi
+
+# git writes fetch progress/ref updates to stderr; capture both streams.
+output="$(git "${fetch_args[@]}" 2>&1)" || die "git fetch failed."
+
+results=()  # each: ACTION<TAB>REF<TAB>SUMMARY
+
+set_tracking_for_pruned() {
+    local deleted_ref="$1"
+    if [[ "$deleted_ref" =~ ^([^/]+)/(.+)$ ]]; then
+        local remote_name="${BASH_REMATCH[1]}" branch_name="${BASH_REMATCH[2]}"
+        local existing
+        existing="$(git config --get "branch.$branch_name.remote" 2>/dev/null || true)"
+        if [[ -z "$existing" ]] && git rev-parse --verify "refs/heads/$branch_name" >/dev/null 2>&1; then
+            git config "branch.$branch_name.remote" "$remote_name"
+            git config "branch.$branch_name.merge" "refs/heads/$branch_name"
+            log_verbose "Set tracking config on '$branch_name' -> '$remote_name/$branch_name' (pruned)."
+        fi
+    fi
+}
+
+while IFS= read -r line; do
+    text="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    if [[ "$text" =~ ^\*[[:space:]]+\[new\ (branch|tag)\][[:space:]]+[^[:space:]]+[[:space:]]+-\>[[:space:]]+([^[:space:]]+) ]]; then
+        results+=("New ${BASH_REMATCH[1]}"$'\t'"${BASH_REMATCH[2]}"$'\t'"$text")
+    elif [[ "$text" =~ ^-[[:space:]]+\[deleted\].*-\>[[:space:]]+([^[:space:]]+) ]]; then
+        ref="${BASH_REMATCH[1]}"
+        results+=("Deleted"$'\t'"$ref"$'\t'"$text")
+        set_tracking_for_pruned "$ref"
+    elif [[ "$text" =~ ^\+[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+-\>[[:space:]]+([^[:space:]]+) ]]; then
+        results+=("Forced update"$'\t'"${BASH_REMATCH[1]}"$'\t'"$text")
+    elif [[ "$text" =~ ^[0-9a-f]+\.\.[0-9a-f]+[[:space:]]+[^[:space:]]+[[:space:]]+-\>[[:space:]]+([^[:space:]]+) ]]; then
+        results+=("Updated"$'\t'"${BASH_REMATCH[1]}"$'\t'"$text")
+    fi
+done <<< "$output"
+
+if [[ "$JSON" == "1" ]]; then
+    if [[ ${#results[@]} -eq 0 ]]; then
+        echo '[]'
+    else
+        printf '%s\n' "${results[@]}" | jq -R -s 'split("\n") | map(select(length>0) |
+            split("\t") | {action:.[0], ref:.[1], summary:.[2]})'
+    fi
+else
+    if [[ ${#results[@]} -gt 0 ]]; then
+        printf '%-16s %s\n' 'ACTION' 'REF'
+        for r in "${results[@]}"; do
+            IFS=$'\t' read -r action ref _ <<< "$r"
+            printf '%-16s %s\n' "$action" "$ref"
+        done
+    fi
+fi

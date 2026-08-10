@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# git-worktree-remove — remove a worktree by branch name.
+# Ported from Remove-Worktree. Accepts a branch as an argument or on stdin
+# (one per line, e.g. piped from git-stale-branch).
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { cat <<'EOF'
+Usage: git-worktree-remove [options] [branch]
+
+Remove a worktree by branch name. Reads branch names from stdin when none is
+given as an argument.
+
+Options:
+  --delete-branch     Also delete the branch after removing its worktree.
+  --force             Force removal of the worktree.
+  --dry-run, --whatif Preview without removing.
+  -v, --verbose       Verbose output.
+EOF
+}
+
+delete_branch=0; force=0; branch=''
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --delete-branch) delete_branch=1; shift ;;
+        --force) force=1; shift ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        -v|--verbose) VERBOSE=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *) branch="$1"; shift ;;
+    esac
+done
+
+require_cmd git
+
+remove_one() {
+    local branch="$1" worktree_path
+    [[ -n "$branch" ]] || return 0
+    worktree_path="$(git_worktree_path "$branch")" || { log_error 'Not in a git repository.'; return 1; }
+
+    if ! should_process "Remove worktree at $worktree_path (branch '$branch')"; then
+        return 0
+    fi
+
+    local removed=0
+    if [[ "$force" == "1" ]]; then
+        git worktree remove "$worktree_path" --force && removed=1 || removed=0
+    else
+        git worktree remove "$worktree_path" && removed=1 || removed=0
+    fi
+
+    if [[ "$delete_branch" == "1" ]]; then
+        if [[ "$removed" == "1" ]]; then
+            git branch -D "$branch"
+        else
+            log_warn "Worktree removal failed; leaving branch '$branch' in place."
+        fi
+    fi
+}
+
+if [[ -n "$branch" ]]; then
+    remove_one "$branch"
+elif [[ ! -t 0 ]]; then
+    while IFS=$'\t' read -r piped _; do
+        remove_one "$piped"
+    done
+else
+    usage >&2
+    die 'No branch specified.'
+fi

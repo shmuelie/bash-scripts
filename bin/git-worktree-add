@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# git-worktree-add — check out an existing branch to a worktree.
+# Ported from Add-Worktree. Prints the worktree path on success.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { cat <<'EOF'
+Usage: git-worktree-add [--dry-run] [-v] <branch>
+
+Check out an existing branch to a new worktree. Prints the worktree path.
+EOF
+}
+
+branch=''
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        -v|--verbose) VERBOSE=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *) branch="$1"; shift ;;
+    esac
+done
+
+[[ -n "$branch" ]] || { usage >&2; die 'branch is required.'; }
+require_cmd git
+
+worktree_path="$(git_worktree_path "$branch")" || die 'Not in a git repository.'
+
+if ! should_process "Add worktree for branch '$branch' at $worktree_path"; then
+    exit 0
+fi
+
+git worktree add "$worktree_path" "$branch" >&2
+printf '%s\n' "$worktree_path"

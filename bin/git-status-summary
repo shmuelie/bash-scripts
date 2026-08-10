@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# git-status-summary — parse git status into a structured summary.
+# Ported from Get-GitStatusSummary. Self-contained; only requires git.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { cat <<'EOF'
+Usage: git-status-summary [--json] [--string] [path]
+
+Summarize the git status of [path] (default: current directory): branch,
+upstream, ahead/behind, staged/working change counts, conflicts, untracked,
+stash count, and any in-progress operation.
+
+Options:
+  --json     Emit a JSON object.
+  --string   Emit only the formatted status string, e.g. [main +1 ~2 -0 | ...].
+EOF
+}
+
+want_string=0; path=''
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --json) JSON=1; shift ;;
+        --string) want_string=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *) path="$1"; shift ;;
+    esac
+done
+
+require_cmd git
+[[ -n "$path" ]] && { cd "$path" || die "Cannot enter path: $path"; }
+
+emit_not_repo() {
+    if [[ "$JSON" == "1" ]]; then
+        require_cmd jq
+        jq -n '{isGitRepo:false, repoName:null, branch:null, upstream:null,
+            worktreePath:null, relativePath:null, aheadBy:0, behindBy:0,
+            upstreamGone:false, operation:null, indexAdded:0, indexModified:0,
+            indexDeleted:0, workingAdded:0, workingModified:0, workingDeleted:0,
+            conflicts:0, untracked:0, stashCount:0, hasChanges:false,
+            statusString:null}'
+    elif [[ "$want_string" == "1" ]]; then
+        printf '\n'
+    else
+        printf 'IsGitRepo: false\n'
+    fi
+}
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    emit_not_repo
+    exit 0
+fi
+
+branch=''; upstream=''; ahead=0; behind=0; upstream_gone=0
+idxA=0; idxM=0; idxD=0; wrkA=0; wrkM=0; wrkD=0; untracked=0; conflicts=0
+
+while IFS= read -r line; do
+    if [[ "$line" == '## '* ]]; then
+        bl="${line:3}"
+        if [[ "$bl" =~ ^(.+)\.\.\.([^ ]+)(\ \[(.+)\])?$ ]]; then
+            branch="${BASH_REMATCH[1]}"
+            upstream="${BASH_REMATCH[2]}"
+            track="${BASH_REMATCH[4]}"
+            [[ "$track" =~ ahead\ ([0-9]+) ]] && ahead="${BASH_REMATCH[1]}"
+            [[ "$track" =~ behind\ ([0-9]+) ]] && behind="${BASH_REMATCH[1]}"
+            [[ "$track" == *gone* ]] && upstream_gone=1
+        else
+            branch="${bl%% *}"
+            [[ "$bl" == 'HEAD (no branch)' ]] && branch='HEAD'
+        fi
+        continue
+    fi
+    [[ ${#line} -lt 2 ]] && continue
+    x="${line:0:1}"; y="${line:1:1}"
+    if [[ "$x" == '?' && "$y" == '?' ]]; then untracked=$((untracked+1)); continue; fi
+    if [[ "$x" == 'U' || "$y" == 'U' || ( "$x" == 'A' && "$y" == 'A' ) || ( "$x" == 'D' && "$y" == 'D' ) ]]; then
+        conflicts=$((conflicts+1)); continue
+    fi
+    case "$x" in
+        A) idxA=$((idxA+1)) ;;
+        M) idxM=$((idxM+1)) ;;
+        R) idxM=$((idxM+1)) ;;
+        C) idxA=$((idxA+1)) ;;
+        D) idxD=$((idxD+1)) ;;
+    esac
+    case "$y" in
+        M) wrkM=$((wrkM+1)) ;;
+        D) wrkD=$((wrkD+1)) ;;
+        A) wrkA=$((wrkA+1)) ;;
+    esac
+done < <(git status --porcelain=v1 --branch 2>/dev/null)
+
+toplevel="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+git_dir="$(git rev-parse --git-dir 2>/dev/null || true)"
+
+operation=''
+if [[ -n "$git_dir" ]]; then
+    if [[ -d "$git_dir/rebase-merge" ]]; then
+        step=''; total=''
+        [[ -f "$git_dir/rebase-merge/msgnum" ]] && step="$(tr -d '[:space:]' < "$git_dir/rebase-merge/msgnum")"
+        [[ -f "$git_dir/rebase-merge/end" ]] && total="$(tr -d '[:space:]' < "$git_dir/rebase-merge/end")"
+        if [[ -f "$git_dir/rebase-merge/interactive" ]]; then type='REBASE-i'; else type='REBASE-m'; fi
+        if [[ -n "$step" && -n "$total" ]]; then operation="$type $step/$total"; else operation="$type"; fi
+    elif [[ -d "$git_dir/rebase-apply" ]]; then
+        step=''; total=''
+        [[ -f "$git_dir/rebase-apply/next" ]] && step="$(tr -d '[:space:]' < "$git_dir/rebase-apply/next")"
+        [[ -f "$git_dir/rebase-apply/last" ]] && total="$(tr -d '[:space:]' < "$git_dir/rebase-apply/last")"
+        if [[ -f "$git_dir/rebase-apply/rebasing" ]]; then type='REBASE'
+        elif [[ -f "$git_dir/rebase-apply/applying" ]]; then type='AM'
+        else type='AM/REBASE'; fi
+        if [[ -n "$step" && -n "$total" ]]; then operation="$type $step/$total"; else operation="$type"; fi
+    elif [[ -f "$git_dir/MERGE_HEAD" ]]; then operation='MERGING'
+    elif [[ -f "$git_dir/REVERT_HEAD" ]]; then operation='REVERTING'
+    elif [[ -f "$git_dir/CHERRY_PICK_HEAD" ]]; then operation='CHERRY-PICKING'
+    elif [[ -f "$git_dir/BISECT_LOG" ]]; then operation='BISECTING'
+    fi
+fi
+
+remote_url="$(git remote get-url origin 2>/dev/null || true)"
+if [[ -n "$remote_url" ]]; then
+    repo_name="${remote_url##*/}"; repo_name="${repo_name%.git}"
+elif [[ -n "$toplevel" ]]; then
+    repo_name="$(basename -- "$toplevel")"
+else
+    repo_name=''
+fi
+
+stash_count=0
+if so="$(git rev-list --walk-reflogs --count refs/stash 2>/dev/null)"; then
+    [[ -n "$so" ]] && stash_count="$so"
+fi
+
+current_path="$(pwd -P)"
+relative_path=''
+if [[ -n "$toplevel" && "$current_path" == "$toplevel"* ]]; then
+    relative_path="${current_path:${#toplevel}}"
+fi
+
+# Relation indicator.
+if [[ "$ahead" -gt 0 && "$behind" -gt 0 ]]; then relation="↓${behind} ↑${ahead}"
+elif [[ "$ahead" -gt 0 ]]; then relation="↑$ahead"
+elif [[ "$behind" -gt 0 ]]; then relation="↓$behind"
+elif [[ "$upstream_gone" == "1" ]]; then relation='×'
+elif [[ -n "$upstream" ]]; then relation='≡'
+else relation=''
+fi
+
+has_index=$(( idxA + idxM + idxD > 0 ? 1 : 0 ))
+has_working=$(( wrkA + wrkM + wrkD > 0 ? 1 : 0 ))
+has_untracked=$(( untracked > 0 ? 1 : 0 ))
+has_conflicts=$(( conflicts > 0 ? 1 : 0 ))
+
+s="[$branch"
+[[ -n "$operation" ]] && s+="|$operation"
+[[ -n "$relation" ]] && s+=" $relation"
+[[ "$has_index" == "1" ]] && s+=" +$idxA ~$idxM -$idxD"
+[[ "$has_index" == "1" || "$has_working" == "1" ]] && s+=" |"
+[[ "$has_working" == "1" ]] && s+=" +$wrkA ~$wrkM -$wrkD"
+[[ "$has_conflicts" == "1" ]] && s+=" !$conflicts"
+[[ "$has_untracked" == "1" ]] && s+=" ?"
+s+="]"
+
+has_changes=$(( has_index || has_working || has_untracked || has_conflicts ))
+
+if [[ "$want_string" == "1" ]]; then
+    printf '%s\n' "$s"
+    exit 0
+fi
+
+if [[ "$JSON" == "1" ]]; then
+    require_cmd jq
+    jq -n \
+        --argjson isGitRepo true \
+        --arg repoName "$repo_name" \
+        --arg branch "$branch" \
+        --arg upstream "$upstream" \
+        --arg worktreePath "$toplevel" \
+        --arg relativePath "$relative_path" \
+        --argjson aheadBy "$ahead" \
+        --argjson behindBy "$behind" \
+        --argjson upstreamGone "$([[ $upstream_gone == 1 ]] && echo true || echo false)" \
+        --arg operation "$operation" \
+        --argjson indexAdded "$idxA" --argjson indexModified "$idxM" --argjson indexDeleted "$idxD" \
+        --argjson workingAdded "$wrkA" --argjson workingModified "$wrkM" --argjson workingDeleted "$wrkD" \
+        --argjson conflicts "$conflicts" --argjson untracked "$untracked" --argjson stashCount "$stash_count" \
+        --argjson hasChanges "$([[ $has_changes == 1 ]] && echo true || echo false)" \
+        --arg statusString "$s" \
+        'def nz: if .=="" then null else . end;
+         {isGitRepo:$isGitRepo, repoName:($repoName|nz), branch:$branch,
+          upstream:($upstream|nz), worktreePath:($worktreePath|nz),
+          relativePath:$relativePath, aheadBy:$aheadBy, behindBy:$behindBy,
+          upstreamGone:$upstreamGone, operation:($operation|nz),
+          indexAdded:$indexAdded, indexModified:$indexModified, indexDeleted:$indexDeleted,
+          workingAdded:$workingAdded, workingModified:$workingModified, workingDeleted:$workingDeleted,
+          conflicts:$conflicts, untracked:$untracked, stashCount:$stashCount,
+          hasChanges:$hasChanges, statusString:$statusString}'
+else
+    printf 'Repo:      %s\n' "$repo_name"
+    printf 'Branch:    %s\n' "$branch"
+    printf 'Upstream:  %s\n' "$upstream"
+    printf 'Ahead/Behind: %s/%s\n' "$ahead" "$behind"
+    [[ -n "$operation" ]] && printf 'Operation: %s\n' "$operation"
+    printf 'Staged:    +%s ~%s -%s\n' "$idxA" "$idxM" "$idxD"
+    printf 'Working:   +%s ~%s -%s\n' "$wrkA" "$wrkM" "$wrkD"
+    printf 'Conflicts: %s  Untracked: %s  Stashes: %s\n' "$conflicts" "$untracked" "$stash_count"
+    printf 'Status:    %s\n' "$s"
+fi

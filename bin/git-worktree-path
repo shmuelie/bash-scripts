@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# git-worktree-path — compute the path a branch's worktree would use.
+# Ported from Get-WorktreePath.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { echo 'Usage: git-worktree-path <branch>'; }
+case "${1:-}" in
+    -h|--help|'') usage; [[ -n "${1:-}" ]] && exit 0 || exit 2 ;;
+esac
+
+require_cmd git
+git_worktree_path "$1"

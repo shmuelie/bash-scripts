@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# git-worktree-update — fast-forward every worktree from upstream.
+# Ported from Update-Worktrees (parallel merge flattened to sequential).
+# Emits one "BRANCH<TAB>STATUS<TAB>BEHIND" line per worktree.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { cat <<'EOF'
+Usage: git-worktree-update [options]
+
+Fetch all remotes and fast-forward worktrees that have no local commits,
+stashing and restoring local changes. Reports the action per worktree.
+
+Statuses: Current, Updated, Skipped (ahead), NoUpstream, Removed (gone/pruned),
+Failed, StashFailed.
+
+Options:
+  --check-remote      Also query the remote to reclassify NoUpstream branches.
+  --json              Emit JSON.
+  --dry-run, --whatif Preview without merging.
+  -v, --verbose       Verbose output.
+EOF
+}
+
+check_remote=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --check-remote) check_remote=1; shift ;;
+        --json) JSON=1; shift ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        -v|--verbose) VERBOSE=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *) die "Unexpected argument: $1" ;;
+    esac
+done
+
+require_cmd git
+[[ "$JSON" == "1" ]] && require_cmd jq
+
+# Fetch first and record pruned branches.
+declare -A pruned=()
+while IFS=$'\t' read -r action ref _; do
+    if [[ "$action" == 'Deleted' && "$ref" =~ ^[^/]+/(.+)$ ]]; then
+        pruned["${BASH_REMATCH[1]}"]=1
+    fi
+done < <("$_SHM_ROOT/bin/git-sync" --json 2>/dev/null | jq -r '.[] | [.action,.ref,.summary]|@tsv' 2>/dev/null || true)
+
+# Bulk ahead/behind per branch.
+declare -A b_ahead=() b_behind=() b_gone=() b_hasup=()
+while IFS='|' read -r branch upstream track; do
+    [[ -z "$branch" ]] && continue
+    a=0; be=0; gone=0
+    if [[ "$track" == *'[gone]'* ]]; then
+        gone=1
+    else
+        [[ "$track" =~ ahead\ ([0-9]+) ]] && a="${BASH_REMATCH[1]}"
+        [[ "$track" =~ behind\ ([0-9]+) ]] && be="${BASH_REMATCH[1]}"
+    fi
+    b_ahead["$branch"]=$a; b_behind["$branch"]=$be; b_gone["$branch"]=$gone
+    [[ -n "$upstream" ]] && b_hasup["$branch"]=1 || b_hasup["$branch"]=0
+done < <(git for-each-ref --format='%(refname:short)|%(upstream:short)|%(upstream:track)' refs/heads/ 2>/dev/null)
+
+results=()   # BRANCH<TAB>STATUS<TAB>BEHIND
+behind_list=()  # BRANCH<TAB>PATH<TAB>BEHIND
+
+while IFS=$'\t' read -r wt_path _ branch; do
+    [[ -z "$branch" || "$branch" == '(detached)' ]] && { results+=("$branch"$'\t'NoUpstream$'\t'0); continue; }
+    hasup="${b_hasup[$branch]:-0}"; gone="${b_gone[$branch]:-0}"
+    ahead="${b_ahead[$branch]:-0}"; behind="${b_behind[$branch]:-0}"
+    if [[ "$hasup" == "0" ]]; then
+        if [[ -n "${pruned[$branch]:-}" ]]; then results+=("$branch"$'\t'Removed$'\t'0)
+        else results+=("$branch"$'\t'NoUpstream$'\t'0); fi
+    elif [[ "$gone" == "1" ]]; then
+        results+=("$branch"$'\t'Removed$'\t'0)
+    elif [[ "$ahead" -gt 0 ]]; then
+        results+=("$branch"$'\t'Skipped$'\t'"$behind")
+    elif [[ "$behind" -eq 0 ]]; then
+        results+=("$branch"$'\t'Current$'\t'0)
+    else
+        behind_list+=("$branch"$'\t'"$wt_path"$'\t'"$behind")
+    fi
+done < <(git_worktrees)
+
+# Reclassify NoUpstream against the remote when requested.
+if [[ "$check_remote" == "1" ]]; then
+    declare -A remote_refs=()
+    while IFS= read -r ref_line; do
+        ref_branch="${ref_line#*$'\t'refs/heads/}"
+        [[ "$ref_branch" != "$ref_line" ]] && remote_refs["$ref_branch"]=1
+    done < <(git --no-pager ls-remote --heads origin 2>/dev/null)
+    new_results=()
+    for r in "${results[@]}"; do
+        IFS=$'\t' read -r br st bh <<< "$r"
+        if [[ "$st" == 'NoUpstream' && -z "${remote_refs[$br]:-}" ]]; then st='Removed'; fi
+        new_results+=("$br"$'\t'"$st"$'\t'"$bh")
+    done
+    results=("${new_results[@]}")
+fi
+
+# Fast-forward behind worktrees.
+if [[ ${#behind_list[@]} -gt 0 ]]; then
+    if should_process "Fast-forward ${#behind_list[@]} worktrees from upstream"; then
+        for entry in "${behind_list[@]}"; do
+            IFS=$'\t' read -r branch wt_path behind <<< "$entry"
+            (
+                cd "$wt_path" || exit 1
+                stashed=0
+                dirty="$(git status --porcelain 2>/dev/null)"
+                if [[ -n "$dirty" ]]; then
+                    if git stash push --include-untracked --quiet >/dev/null 2>&1; then stashed=1; fi
+                    if [[ "$stashed" == "0" ]]; then
+                        printf '%s\tStashFailed\t%s\n' "$branch" "$behind"; exit 0
+                    fi
+                fi
+                if git merge --ff-only '@{upstream}' --quiet >/dev/null 2>&1; then st='Updated'; else st='Failed'; fi
+                if [[ "$stashed" == "1" ]]; then
+                    git stash pop --quiet >/dev/null 2>&1 || log_warn "git stash pop failed for $branch"
+                fi
+                printf '%s\t%s\t%s\n' "$branch" "$st" "$behind"
+            )
+        done > /tmp/.shm_wt_update.$$ || true
+        while IFS=$'\t' read -r br st bh; do
+            results+=("$br"$'\t'"$st"$'\t'"$bh")
+        done < /tmp/.shm_wt_update.$$
+        rm -f /tmp/.shm_wt_update.$$
+    fi
+fi
+
+if [[ "$JSON" == "1" ]]; then
+    if [[ ${#results[@]} -eq 0 ]]; then echo '[]'; else
+        printf '%s\n' "${results[@]}" | jq -R -s 'split("\n") | map(select(length>0) |
+            split("\t") | {branch:.[0], status:.[1], behindBy:(.[2]|tonumber)})'
+    fi
+else
+    printf '%-40s %-12s %s\n' 'BRANCH' 'STATUS' 'BEHIND'
+    for r in "${results[@]}"; do
+        IFS=$'\t' read -r br st bh <<< "$r"
+        printf '%-40s %-12s %s\n' "$br" "$st" "$bh"
+    done
+fi
