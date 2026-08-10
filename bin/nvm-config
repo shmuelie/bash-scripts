@@ -28,6 +28,8 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
     -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
 esac
+# Show usage for `<subcommand> --help` too (but not past a `--` passthrough).
+for _a in "$@"; do [[ "$_a" == "--" ]] && break; case "$_a" in -h|--help) usage; exit 0 ;; esac; done
 
 case "$cmd" in
     root) nvm_dir ;;

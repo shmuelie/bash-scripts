@@ -132,6 +132,18 @@ EOF
 
 # ---- session CRUD --------------------------------------------------------
 
+@test "copilot-session subcommand accepts --help and shows usage" {
+    run copilot-session list --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == Usage:* ]]
+}
+
+@test "copilot-session resume preserves -- passthrough (does not treat --help as usage)" {
+    run copilot-session resume nosuch -- --help
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not found"* ]]
+}
+
 @test "copilot-session list filters to the current directory" {
     make_session here "Here" 2026-05-01T00:00:00Z main
     ( mkdir -p "$WORK/other" )
