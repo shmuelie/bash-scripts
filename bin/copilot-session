@@ -88,23 +88,11 @@ case "$cmd" in
         [[ -f "$ws" ]] || die "workspace.yaml not found for session $id."
         if ! should_process "Rename session ${id:0:8} to '$new_name'"; then exit 0; fi
 
-        # Rewrite name (handling block scalars) and summary if present.
-        tmp="$(mktemp)"
-        awk -v newname="$new_name" '
-            BEGIN { skip=0 }
-            skip==1 {
-                if ($0 ~ /^[[:space:]]/ || $0 == "") { next }
-                skip=0
-            }
-            /^name:/ {
-                print "name: " newname
-                if ($0 ~ /:[[:space:]]*[|>]/) { skip=1 }
-                next
-            }
-            /^summary:/ { print "summary: " newname; next }
-            { print }
-        ' "$ws" > "$tmp"
-        mv "$tmp" "$ws"
+        updates=(name "$new_name")
+        if workspace_yaml_has "$ws" summary; then
+            updates+=(summary "$new_name")
+        fi
+        workspace_yaml_set_strings "$ws" "${updates[@]}"
         log_verbose "Renamed session ${id:0:8} to '$new_name'"
         copilot_sessions --id "$id"
         ;;
