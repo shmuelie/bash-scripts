@@ -137,9 +137,7 @@ done < <(find "$root" -name .git -print -prune 2>/dev/null | sort)
 umask 077
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/git-worktree-update-all.XXXXXX")" ||
     die 'Could not create a secure worker directory.'
-# shellcheck disable=SC2329  # invoked indirectly by the trap below
-cleanup() { rm -rf -- "$scratch"; }
-trap cleanup EXIT HUP INT TERM
+trap 'rm -rf -- "$scratch"' EXIT HUP INT TERM
 
 pids=(); orgs=(); names=(); paths=(); raw_files=(); err_files=(); code_files=()
 active_pids=()

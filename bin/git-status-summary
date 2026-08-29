@@ -37,7 +37,11 @@ candidate="${path:-.}"
 if [[ "$explicit_path" == "1" ]]; then
     repo="$(git_resolve_repository_path "$candidate")" || exit 1
 else
-    repo="$(cd "$candidate" 2>/dev/null && pwd -P || true)"
+    if repo="$(cd "$candidate" 2>/dev/null && pwd -P)"; then
+        :
+    else
+        repo=''
+    fi
 fi
 
 emit_not_repo() {
