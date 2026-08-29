@@ -26,8 +26,8 @@ global git identity must be set. CI (`.github/workflows/ci.yml`) runs
   commands take a subcommand as `$1` (e.g. `copilot-session list`).
 - **`lib/`** — sourceable logic. Every command sources `lib/common.sh` first,
   then its area helper (`lib/git/git-common.sh`, `lib/copilot/copilot-common.sh`,
-  `lib/copilot/launch-plan.sh`, `lib/node/nvm-common.sh`). Put shared/testable
-  logic in `lib/`, keep `bin/` scripts thin.
+  `lib/copilot/launch-plan.sh`, `lib/node/nvm-common.sh`, `lib/setup/*.sh`).
+  Put shared/testable logic in `lib/`, keep `bin/` scripts thin.
 - **`lib/copilot/session-maintenance.js`** — the one intentional exception:
   event-stream surgery (merge/compress/repair) runs under Node because it needs
   stateful JSONL reordering. Keep it **Node v12 compatible** (no `??`, `?.`,
@@ -65,6 +65,13 @@ global git identity must be set. CI (`.github/workflows/ci.yml`) runs
   invoking process).
 - **`COPILOT_HOME`** overrides `~/.copilot` (used by tests); prefer such env
   overrides over hardcoded paths so commands stay testable.
+- Git helpers accept explicit repository targeting (`--path`/`-C`) and worktree
+  path addressing. Resolve through `git_resolve_repository_path` and
+  `git_resolve_worktree_target`; do not reconstruct a conventional worktree
+  path when the actual path is available.
+- `install.sh --install-deps` is explicitly opt-in. Never add implicit package
+  installation or remote installer pipes; update package mappings and stubbed
+  tests in `test/install-deps.bats`.
 
 ## Contribution notes
 

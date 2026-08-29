@@ -36,6 +36,14 @@ teardown() { rm -rf "$WORK"; }
     [ "$output" = "1" ]
 }
 
+@test "re-running preserves the shell rc file mode" {
+    printf 'existing\n' > "$RC"
+    chmod 640 "$RC"
+    "$REPO_ROOT/install.sh" --method symlink --prefix "$PREFIX" --rc "$RC" >/dev/null
+    run stat -c '%a' "$RC"
+    [ "$output" = "640" ]
+}
+
 @test "path method writes a PATH export instead of symlinks" {
     run "$REPO_ROOT/install.sh" --method path --prefix "$PREFIX" --rc "$RC"
     [ "$status" -eq 0 ]

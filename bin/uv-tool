@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# uv-tool — list and install tools managed by uv.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+
+usage() { cat <<'EOF'
+Usage: uv-tool <command> [args]
+
+Commands:
+  list [name] [--json]       List installed uv tools, optionally by exact name.
+  install <name> [--dry-run] Install a tool unless that exact name is installed.
+EOF
+}
+
+list_tools() {
+    local wanted="$1" line clean name version raw
+    local -a rows=()
+    if ! raw="$(uv tool list 2>&1)"; then
+        printf '%s\n' "$raw" >&2
+        return 1
+    fi
+    while IFS= read -r line; do
+        clean="$(printf '%s' "$line" | sed $'s/\033\\[[0-9;]*[[:alpha:]]//g')"
+        [[ "$clean" == -* ]] && continue
+        if [[ "$clean" =~ ^([^[:space:]]+)[[:space:]]+v([^[:space:]]+) ]]; then
+            name="${BASH_REMATCH[1]}"
+            version="${BASH_REMATCH[2]}"
+            [[ -z "$wanted" || "$name" == "$wanted" ]] &&
+                rows+=("$name"$'\x1f'"$version")
+        fi
+    done <<< "$raw"
+    printf '%s\n' "${rows[@]:-}"
+}
+
+cmd="${1:-}"
+shift || true
+case "$cmd" in
+    -h|--help|'') usage; [[ -n "$cmd" ]] && exit 0 || exit 2 ;;
+esac
+for _a in "$@"; do
+    case "$_a" in -h|--help) usage; exit 0 ;; esac
+done
+require_cmd uv
+
+case "$cmd" in
+    list)
+        wanted=''
+        json=0
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --json) json=1; shift ;;
+                -*) die "Unknown option: $1" ;;
+                *)
+                    [[ -z "$wanted" ]] || die 'list accepts at most one name.'
+                    wanted="$1"
+                    shift
+                    ;;
+            esac
+        done
+        output="$(list_tools "$wanted")"
+        if [[ "$json" == "1" ]]; then
+            require_cmd jq
+            if [[ -z "$output" ]]; then
+                printf '[]\n'
+            else
+                printf '%s\n' "$output" | jq -R -s '
+                    split("\n") | map(select(length > 0) | split("\u001f") |
+                    {name:.[0], version:.[1]})'
+            fi
+        else
+            while IFS=$'\x1f' read -r name version; do
+                [[ -n "$name" ]] && printf '%-40s v%s\n' "$name" "$version"
+            done <<< "$output"
+        fi
+        ;;
+    install)
+        name=''
+        installed=''
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --dry-run|--whatif) DRY_RUN=1; shift ;;
+                -*) die "Unknown option: $1" ;;
+                *)
+                    [[ -z "$name" ]] || die 'install accepts exactly one name.'
+                    name="$1"
+                    shift
+                    ;;
+            esac
+        done
+        [[ -n "$name" ]] || die 'install requires a tool name.'
+        if ! installed="$(list_tools "$name")"; then
+            exit 1
+        fi
+        if [[ -n "$installed" ]]; then
+            printf '%s is already installed.\n' "$name"
+            exit 0
+        fi
+        should_process "uv tool install $name" || exit 0
+        uv tool install "$name"
+        ;;
+    *) die "Unknown command: $cmd (see --help)" ;;
+esac

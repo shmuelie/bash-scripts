@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# format-duration — format an elapsed duration. Ported from Format-Duration.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/utils/format.sh"
+
+usage() { cat <<'EOF'
+Usage: format-duration [--milliseconds] <number>
+
+Format a non-negative duration. Input is seconds by default; --milliseconds
+interprets it as milliseconds.
+
+Output:
+  3600 seconds or more  H:MM:SS.mmm
+  60 seconds or more    M:SS.mmm
+  under 60 seconds      <seconds> seconds (rounded to at most 3 decimals)
+EOF
+}
+
+unit='seconds'
+value=''
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --milliseconds) unit='milliseconds'; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *)
+            [[ -z "$value" ]] || die 'format-duration accepts exactly one number.'
+            value="$1"
+            shift
+            ;;
+    esac
+done
+
+[[ -n "$value" ]] || die 'format-duration requires a number.'
+numeric_re='^[+]?(0|[0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$'
+[[ "$value" =~ $numeric_re ]] || die "Invalid duration: $value"
+
+format_duration_value "$value" "$unit"
