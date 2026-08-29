@@ -71,9 +71,15 @@ teardown() { rm -rf "$WORK"; }
 }
 
 @test "--update fast-forwards the clone and re-links" {
-    # Build a bare origin with an explicit branch (CI checks out detached HEAD).
-    git init --quiet --bare --initial-branch=main "$WORK/origin.git"
-    git -C "$REPO_ROOT" push --quiet "$WORK/origin.git" HEAD:refs/heads/main
+    # Build a standalone seed repo (CI checks out a shallow detached HEAD).
+    mkdir -p "$WORK/seed"
+    git -C "$REPO_ROOT" archive HEAD | tar -x -C "$WORK/seed"
+    git -C "$WORK/seed" init --quiet --initial-branch=main
+    git -C "$WORK/seed" config user.email t@e.com
+    git -C "$WORK/seed" config user.name Tester
+    git -C "$WORK/seed" add .
+    git -C "$WORK/seed" commit --quiet -m seed
+    git clone --quiet --bare "$WORK/seed" "$WORK/origin.git"
     git clone --quiet "$WORK/origin.git" "$WORK/clone"
     git -C "$WORK/clone" config user.email t@e.com
     git -C "$WORK/clone" config user.name Tester
