@@ -6,6 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Secured Git worktree maintenance by removing the predictable `/tmp` result
+  file, using a unique repository-layout staging directory, and reporting
+  missing worktrees instead of dropping them from results.
+- `git-worktree-update` now skips behind worktrees with an in-progress merge,
+  rebase, cherry-pick, revert, or bisect, returning `InProgress` plus the
+  operation string. Failed remote checks leave `NoUpstream` rows unchanged.
+- `git-stale-branch` now errors outside a repository and on configured remote
+  lookup failures, and excludes never-pushed branches by default; use
+  `--include-never-pushed` to opt in.
+- `git-status-summary` reports the correct unborn branch (including empty
+  clones with an upstream), and `git-sync` parses fetch output under a stable C
+  locale.
+- Fixed the no-`fzf` picker fallback to read choices from the controlling
+  terminal and report a clear error when no terminal is available.
+- Hardened Copilot session maintenance against invalid `--keep` values and
+  malformed/truncated JSONL, with validation before writes and backup-first
+  repair/compression.
+- Suppressed automatic resume selection for explicit `--session-id` and
+  launcher dry-runs while preserving explicit `--resume-session`.
+- Added safe focused YAML scalar parsing/writing for Copilot workspace metadata,
+  including single-line/multiline quoted and block scalars used by list,
+  rename, launch, and merge.
+- Made npm, pip, and uv package listing tolerate warning text around JSON output
+  and report a clear error when no valid payload exists.
+
 ### Added
 
 - Foundation: repository scaffolding, `lib/common.sh` shared helpers

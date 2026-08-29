@@ -113,11 +113,25 @@ EOF
 
 @test "npm-package list --outdated --json emits an array" {
     stub npm 'case "$*" in
-        "outdated --json --global") echo "{\"typescript\":{\"current\":\"5.0.0\",\"latest\":\"5.4.0\"}}";;
+        "outdated --json --global") printf "npm warning before\n{\"typescript\":{\"current\":\"5.0.0\",\"latest\":\"5.4.0\"}}\nnpm warning after\n";;
     esac'
     run bash -c "npm-package list --global --outdated --json | jq -c '.[0] | {name, version, latest}'"
     [ "$status" -eq 0 ]
     [ "$output" = '{"name":"typescript","version":"5.0.0","latest":"5.4.0"}' ]
+}
+
+@test "npm-package reports missing JSON payload clearly" {
+    stub npm 'echo "npm warning only"'
+    run npm-package list --json
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"No valid JSON payload found in npm output."* ]]
+}
+
+@test "npm-package treats empty outdated output as no updates" {
+    stub npm 'exit 0'
+    run npm-package list --outdated --json
+    [ "$status" -eq 0 ]
+    [ "$output" = "[]" ]
 }
 
 @test "npm-package update --global uses install -g name@latest" {
@@ -133,6 +147,36 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"What if:"* ]]
     [ ! -s "$CALL_LOG" ]
+}
+
+# ---- pip / uv ------------------------------------------------------------
+
+@test "pip-package tolerates warning lines around JSON" {
+    stub pip 'printf "pip warning before\n[{\"name\":\"demo\",\"version\":\"1.0\"}]\npip warning after\n"'
+    run bash -c "pip-package list --json | jq -c '.[0]'"
+    [ "$status" -eq 0 ]
+    [ "$output" = '{"name":"demo","version":"1.0"}' ]
+}
+
+@test "pip-package reports missing JSON payload clearly" {
+    stub pip 'echo "pip warning only"'
+    run pip-package list --json
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"No valid JSON payload found in pip output."* ]]
+}
+
+@test "uv-package tolerates warning lines around JSON" {
+    stub uv 'printf "uv warning before\n[{\"name\":\"demo\",\"version\":\"2.0\"}]\nuv warning after\n"'
+    run bash -c "uv-package list --json | jq -c '.[0]'"
+    [ "$status" -eq 0 ]
+    [ "$output" = '{"name":"demo","version":"2.0"}' ]
+}
+
+@test "uv-package reports missing JSON payload clearly" {
+    stub uv 'echo "uv warning only"'
+    run uv-package list --json
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"No valid JSON payload found in uv output."* ]]
 }
 
 # ---- dotnet tool ---------------------------------------------------------

@@ -4,6 +4,7 @@
 set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/utils/json-output.sh"
 
 usage() { cat <<'EOF'
 Usage: pip-package <command> [options]
@@ -45,11 +46,13 @@ case "$cmd" in
             any) ;;
             *) die "Invalid state: $state (any|outdated|uptodate)" ;;
         esac
-        out="$(pip "${args[@]}")"
+        require_cmd jq
+        raw="$(pip "${args[@]}")"
+        out="$(printf '%s' "$raw" | extract_json_payload)" ||
+            die 'No valid JSON payload found in pip output.'
         if [[ "$json" == "1" ]]; then
             printf '%s\n' "$out"
         else
-            require_cmd jq
             printf '%s' "$out" | jq -r '.[] | "\(.name)\t\(.version)\(if .latest_version then "\t-> "+.latest_version else "" end)"'
         fi
         ;;

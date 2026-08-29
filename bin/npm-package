@@ -4,6 +4,7 @@
 set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/utils/json-output.sh"
 
 usage() { cat <<'EOF'
 Usage: npm-package <command> [options]
@@ -41,7 +42,10 @@ case "$cmd" in
         if [[ "$outdated" == "1" ]]; then
             args=(outdated --json); [[ "$global" == "1" ]] && args+=(--global)
             raw="$(npm "${args[@]}" 2>/dev/null || true)"
-            [[ -z "$raw" || "$raw" == '{}' ]] && { [[ "$json" == "1" ]] && echo '[]'; exit 0; }
+            [[ -z "${raw//[[:space:]]/}" ]] && { [[ "$json" == "1" ]] && echo '[]'; exit 0; }
+            raw="$(printf '%s' "$raw" | extract_json_payload)" ||
+                die 'No valid JSON payload found in npm output.'
+            [[ "$raw" == '{}' ]] && { [[ "$json" == "1" ]] && echo '[]'; exit 0; }
             if [[ "$json" == "1" ]]; then
                 printf '%s' "$raw" | jq --argjson g "$([[ $global == 1 ]] && echo true || echo false)" \
                     'to_entries | map({name:.key, version:.value.current, latest:.value.latest, global:$g})'
@@ -52,6 +56,8 @@ case "$cmd" in
         else
             args=(list --json --depth=0); [[ "$global" == "1" ]] && args+=(--global)
             raw="$(npm "${args[@]}" 2>/dev/null || true)"
+            raw="$(printf '%s' "$raw" | extract_json_payload)" ||
+                die 'No valid JSON payload found in npm output.'
             if [[ "$json" == "1" ]]; then
                 printf '%s' "$raw" | jq --argjson g "$([[ $global == 1 ]] && echo true || echo false)" \
                     '(.dependencies // {}) | to_entries | map({name:.key, version:.value.version, global:$g})'

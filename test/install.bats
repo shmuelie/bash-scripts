@@ -87,7 +87,8 @@ teardown() { rm -rf "$WORK"; }
     chmod +x "$WORK/pusher/bin/brand-new-cmd"
     git -C "$WORK/pusher" add bin/brand-new-cmd
     git -C "$WORK/pusher" commit --quiet -m "add brand-new-cmd"
-    git -C "$WORK/pusher" push --quiet origin HEAD:main
+    target_branch="$(git -C "$WORK/clone" branch --show-current)"
+    git -C "$WORK/pusher" push --quiet origin "HEAD:$target_branch"
 
     before="$(git -C "$WORK/clone" rev-parse HEAD)"
     run "$WORK/clone/install.sh" --update --prefix "$PREFIX" --rc "$RC"

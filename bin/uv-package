@@ -4,6 +4,7 @@
 set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/utils/json-output.sh"
 
 usage() { cat <<'EOF'
 Usage: uv-package <command> [options]
@@ -38,8 +39,10 @@ case "$cmd" in
         done
         args=(pip list --no-progress --format json --system)
         [[ "$outdated" == "1" ]] && args+=(--outdated)
-        out="$(uv "${args[@]}")"
         require_cmd jq
+        raw="$(uv "${args[@]}")"
+        out="$(printf '%s' "$raw" | extract_json_payload)" ||
+            die 'No valid JSON payload found in uv output.'
         if [[ "$top" == "1" ]]; then
             # Keep only packages with an empty Required-by field.
             filtered='[]'

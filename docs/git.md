@@ -17,8 +17,8 @@ executable in `bin/`. Add `bin/` to your `PATH` first.
 | `git-worktree-add` | Check out an existing branch to a worktree |
 | `git-worktree-remove` | Remove a worktree (optionally deleting its branch) |
 | `git-worktree-switch` | Print the path of a worktree by branch name (use with `cd`) |
-| `git-worktree-update` | Fast-forward every worktree from upstream |
-| `git-stale-branch` | Find local branches whose upstream branch is gone |
+| `git-worktree-update` | Fast-forward every worktree from upstream, skipping in-progress Git operations |
+| `git-stale-branch` | Find local branches whose upstream branch is gone (`--include-never-pushed` opts into local-only branches) |
 | `git-status-summary` | Parse `git status` into a structured summary |
 
 ## Directory changes
@@ -57,8 +57,20 @@ git-repo-new https://github.com/owner/repo
 cd "$(git-worktree-new my-feature)"
 git-worktree-update --json | jq '.[] | select(.status != "Current")'
 git-stale-branch | git-worktree-remove --delete-branch
+git-stale-branch --include-never-pushed
 git-status-summary --string
 ```
+
+`git-worktree-update` returns `InProgress` with an `operation` value instead of
+stashing or merging a worktree during an active merge, rebase, cherry-pick,
+revert, or bisect. A worktree directory removed during an update is reported as
+`Missing`. With `--check-remote`, a failed remote lookup leaves `NoUpstream`
+worktrees unclassified and emits a warning.
+
+`git-stale-branch` treats only configured upstreams marked `[gone]` as stale by
+default. `--include-never-pushed` also includes branches with no upstream.
+Configured remote lookup failures are errors rather than evidence that every
+candidate branch was deleted.
 
 ## Requirements
 
