@@ -7,31 +7,38 @@ source "$_SHM_ROOT/lib/common.sh"
 source "$_SHM_ROOT/lib/git/git-common.sh"
 
 usage() { cat <<'EOF'
-Usage: git-status-summary [--json] [--string] [path]
+Usage: git-status-summary [--json] [--string] [--path <repository-or-child>]
 
 Summarize the git status of [path] (default: current directory): branch,
 upstream, ahead/behind, staged/working change counts, conflicts, untracked,
 stash count, and any in-progress operation.
 
 Options:
+  --path, -C  Inspect this repository path without changing the caller's cwd.
   --json     Emit a JSON object.
   --string   Emit only the formatted status string, e.g. [main +1 ~2 -0 | ...].
 EOF
 }
 
-want_string=0; path=''
+want_string=0; path=''; explicit_path=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         --json) JSON=1; shift ;;
         --string) want_string=1; shift ;;
+        --path|-C) path="$2"; explicit_path=1; shift 2 ;;
         -*) die "Unknown option: $1" ;;
         *) path="$1"; shift ;;
     esac
 done
 
 require_cmd git
-[[ -n "$path" ]] && { cd "$path" || die "Cannot enter path: $path"; }
+candidate="${path:-.}"
+if [[ "$explicit_path" == "1" ]]; then
+    repo="$(git_resolve_repository_path "$candidate")" || exit 1
+else
+    repo="$(cd "$candidate" 2>/dev/null && pwd -P || true)"
+fi
 
 emit_not_repo() {
     if [[ "$JSON" == "1" ]]; then
@@ -49,7 +56,7 @@ emit_not_repo() {
     fi
 }
 
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if [[ -z "$repo" ]] || ! git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     emit_not_repo
     exit 0
 fi
@@ -92,12 +99,12 @@ while IFS= read -r line; do
         D) wrkD=$((wrkD+1)) ;;
         A) wrkA=$((wrkA+1)) ;;
     esac
-done < <(git status --porcelain=v1 --branch 2>/dev/null)
+done < <(git -C "$repo" status --porcelain=v1 --branch 2>/dev/null)
 
-toplevel="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-operation="$(git_operation .)"
+toplevel="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null || true)"
+operation="$(git_operation "$repo")"
 
-remote_url="$(git remote get-url origin 2>/dev/null || true)"
+remote_url="$(git -C "$repo" remote get-url origin 2>/dev/null || true)"
 if [[ -n "$remote_url" ]]; then
     repo_name="${remote_url##*/}"; repo_name="${repo_name%.git}"
 elif [[ -n "$toplevel" ]]; then
@@ -107,11 +114,11 @@ else
 fi
 
 stash_count=0
-if so="$(git rev-list --walk-reflogs --count refs/stash 2>/dev/null)"; then
+if so="$(git -C "$repo" rev-list --walk-reflogs --count refs/stash 2>/dev/null)"; then
     [[ -n "$so" ]] && stash_count="$so"
 fi
 
-current_path="$(pwd -P)"
+current_path="$repo"
 relative_path=''
 if [[ -n "$toplevel" && "$current_path" == "$toplevel"* ]]; then
     relative_path="${current_path:${#toplevel}}"

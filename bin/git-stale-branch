@@ -14,6 +14,7 @@ List local branches whose upstream is gone or missing from the remote
 (e.g. after a merged/abandoned PR).
 
 Options:
+  --path, -C <path>  Repository or child path to inspect.
   --remote <name>     Remote to check (default: origin).
   --user <name>       Filter to user/<name>/* branches (default: git user).
   --all               Include all branches, not just the user's.
@@ -24,10 +25,11 @@ Options:
 EOF
 }
 
-remote='origin'; user=''; all=0; include_never_pushed=0; include_pr=0
+remote='origin'; user=''; all=0; include_never_pushed=0; include_pr=0; repo_arg=''
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
+        --path|-C) repo_arg="$2"; shift 2 ;;
         --remote) remote="$2"; shift 2 ;;
         --user) user="$2"; shift 2 ;;
         --all) all=1; shift ;;
@@ -41,11 +43,11 @@ done
 
 require_cmd git
 [[ "$JSON" == "1" ]] && require_cmd jq
-git rev-parse --git-dir >/dev/null 2>&1 || die "Not a git repository (or git failed) in '$(pwd)'."
+repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
 
 # Determine user filter.
 if [[ "$all" == "0" && -z "$user" ]]; then
-    email="$(git config user.email 2>/dev/null || true)"
+    email="$(git -C "$repo" config user.email 2>/dev/null || true)"
     [[ "$email" =~ ^([^@]+)@ ]] && user="${BASH_REMATCH[1]}"
 fi
 user_prefix=''
@@ -59,7 +61,7 @@ while IFS='|' read -r branch upstream track; do
     if [[ "$track" != '[gone]' && ! ( -z "$upstream" && "$include_never_pushed" == "1" ) ]]; then continue; fi
     if [[ -n "$user_prefix" && "$branch" != "$user_prefix"* ]]; then continue; fi
     candidates+=("$branch")
-done < <(git --no-pager for-each-ref --format='%(refname:short)|%(upstream:short)|%(upstream:track)' refs/heads/)
+done < <(git -C "$repo" --no-pager for-each-ref --format='%(refname:short)|%(upstream:short)|%(upstream:track)' refs/heads/)
 
 [[ ${#candidates[@]} -eq 0 ]] && { [[ "$JSON" == "1" ]] && echo '[]'; exit 0; }
 
@@ -67,8 +69,8 @@ done < <(git --no-pager for-each-ref --format='%(refname:short)|%(upstream:short
 declare -A remote_refs=()
 ls_filter='refs/heads/*'
 [[ -n "$user_prefix" ]] && ls_filter="refs/heads/$user_prefix*"
-if git remote get-url "$remote" >/dev/null 2>&1; then
-    if ! remote_output="$(git --no-pager ls-remote --heads "$remote" "$ls_filter" 2>&1)"; then
+if git -C "$repo" remote get-url "$remote" >/dev/null 2>&1; then
+    if ! remote_output="$(git -C "$repo" --no-pager ls-remote --heads "$remote" "$ls_filter" 2>&1)"; then
         die "Failed to list remote branches from '$remote': $remote_output"
     fi
     while IFS= read -r ref_line; do
@@ -79,14 +81,14 @@ fi
 
 # Build worktree path lookup.
 declare -A worktree_paths=()
-while IFS=$'\t' read -r wt_path _ wt_branch; do
+while IFS="$SHM_FS" read -r wt_path _ wt_branch _; do
     [[ -n "$wt_branch" ]] && worktree_paths["$wt_branch"]="$wt_path"
-done < <(git_worktrees)
+done < <(git_worktrees "$repo")
 
 # ADO context for optional PR lookups.
 ado_org=''; ado_project=''; ado_repo=''
 if [[ "$include_pr" == "1" ]]; then
-    git_url="$(git config --get "remote.$remote.url" 2>/dev/null || true)"
+    git_url="$(git -C "$repo" config --get "remote.$remote.url" 2>/dev/null || true)"
     if [[ "$git_url" =~ dev\.azure\.com/([^/]+)/([^/]+)/_git/(.+)$ ]]; then
         ado_org="https://dev.azure.com/${BASH_REMATCH[1]}"; ado_project="${BASH_REMATCH[2]}"; ado_repo="${BASH_REMATCH[3]}"
     elif [[ "$git_url" =~ ([^/]+)\.visualstudio\.com/(DefaultCollection/)?([^/]+)/_git/(.+)$ ]]; then
@@ -94,7 +96,7 @@ if [[ "$include_pr" == "1" ]]; then
     fi
 fi
 
-results=()  # BRANCH<TAB>PATH<TAB>PRSTATUS<TAB>PRID<TAB>PRTITLE
+results=()  # BRANCH<FS>PATH<FS>PRSTATUS<FS>PRID<FS>PRTITLE
 for branch in "${candidates[@]}"; do
     [[ -n "${remote_refs[$branch]:-}" ]] && continue
     path="${worktree_paths[$branch]:-}"
@@ -109,18 +111,18 @@ for branch in "${candidates[@]}"; do
             pr_title="$(printf '%s' "$pr_json" | jq -r '.title // empty')"
         fi
     fi
-    results+=("$branch"$'\t'"$path"$'\t'"$pr_status"$'\t'"$pr_id"$'\t'"$pr_title")
+    results+=("$branch$SHM_FS$path$SHM_FS$pr_status$SHM_FS$pr_id$SHM_FS$pr_title")
 done
 
 if [[ "$JSON" == "1" ]]; then
     if [[ ${#results[@]} -eq 0 ]]; then echo '[]'; else
-        printf '%s\n' "${results[@]}" | jq -R -s 'def nz: if .=="" then null else . end;
+        printf '%s\n' "${results[@]}" | jq -R -s --arg fs "$SHM_FS" 'def nz: if .=="" then null else . end;
             split("\n") | map(select(length>0) |
-            split("\t") | {branch:.[0], path:(.[1]|nz), existsOnRemote:false,
+            split($fs) | {branch:.[0], path:(.[1]|nz), existsOnRemote:false,
             prStatus:(.[2]|nz), prId:(.[3]|nz), prTitle:(.[4]|nz)})'
     fi
 else
     for r in "${results[@]}"; do
-        printf '%s\n' "$(printf '%s' "$r" | cut -f1)"
+        printf '%s\n' "${r%%"$SHM_FS"*}"
     done
 fi

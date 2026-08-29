@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# git-sync — fetch remotes with pruning, reporting ref changes.
-# Ported from Sync-GitRemote. Sets tracking config on orphaned local branches
-# after a prune so [gone] detection works downstream.
+# git-sync — fetch remotes with pruning and GitHub account awareness.
+# Ported from Sync-GitRemote.
 set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
@@ -10,62 +9,217 @@ source "$_SHM_ROOT/lib/git/git-common.sh"
 usage() { cat <<'EOF'
 Usage: git-sync [options] [remote]
 
-Fetch from all remotes (or a specific [remote]) with pruning and report
-new/updated/deleted/forced refs.
-
 Options:
-  --no-prune          Do not prune deleted remote-tracking refs.
-  --json              Emit JSON results.
-  --dry-run, --whatif Preview without fetching.
-  -v, --verbose       Verbose output.
+  --path, -C <repository-or-child>  Repository to fetch.
+  --no-prune                        Do not prune deleted refs.
+  --github-account <host/owner=account>
+                                    Explicit account mapping (repeatable).
+  --no-github-account-resolve       Disable account-aware fetch.
+  --json                            Emit JSON results.
+  --dry-run, --whatif               Preview without fetching.
+  -v, --verbose                     Verbose output.
 EOF
 }
 
-no_prune=0; remote=''
+no_prune=0; remote=''; repo_arg=''; no_account_resolve=0
+declare -A explicit_accounts=() account_cache=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
+        --path|-C) repo_arg="$2"; shift 2 ;;
         --no-prune) no_prune=1; shift ;;
+        --github-account)
+            mapping="$2"; shift 2
+            [[ "$mapping" == *=* ]] || die "Invalid --github-account '$mapping'; expected host/owner=account."
+            key="${mapping%%=*}"; account="${mapping#*=}"
+            [[ "$key" == */* && "$key" != */*/* ]] ||
+                die "Invalid --github-account key '$key'; expected host/owner."
+            host="${key%%/*}"; owner="${key#*/}"
+            if ! git_validate_github_host "$host" ||
+                [[ ! "$owner" =~ ^[A-Za-z0-9_.-]+$ ]] ||
+                ! git_validate_github_account "$account"; then
+                die "Invalid GitHub host, owner, or account in '$mapping'."
+            fi
+            explicit_accounts["${host,,}/${owner,,}"]="$account"
+            ;;
+        --no-github-account-resolve) no_account_resolve=1; shift ;;
         --json) JSON=1; shift ;;
         --dry-run|--whatif) DRY_RUN=1; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
         -*) die "Unknown option: $1" ;;
-        *) remote="$1"; shift ;;
+        *) [[ -z "$remote" ]] || die "Unexpected argument: $1"; remote="$1"; shift ;;
     esac
 done
 
 require_cmd git
 [[ "$JSON" == "1" ]] && require_cmd jq
-
-fetch_args=(fetch)
-if [[ -n "$remote" ]]; then
-    fetch_args+=("$remote")
+if [[ -n "$repo_arg" ]]; then
+    repo="$(git_resolve_repository_path "$repo_arg")" || exit 1
 else
-    fetch_args+=(--all)
-fi
-[[ "$no_prune" == "0" ]] && fetch_args+=(--prune)
-
-target="all remotes"
-[[ -n "$remote" ]] && target="remote '$remote'"
-if ! should_process "git fetch ($target)"; then
-    exit 0
+    repo="$(pwd -P)"
 fi
 
-# Parsed fetch output must be locale-stable; do not mutate the caller's locale.
-# git writes fetch progress/ref updates to stderr, so capture both streams.
-output="$(LC_ALL=C LANG=C git "${fetch_args[@]}" 2>&1)" || die "git fetch failed."
+target='all remotes'; [[ -n "$remote" ]] && target="remote '$remote'"
+should_process "git fetch ($target)" || exit 0
 
-results=()  # each: ACTION<TAB>REF<TAB>SUMMARY
+prune_args=()
+[[ "$no_prune" == "0" ]] && prune_args+=(--prune)
 
+FETCH_OUTPUT=''; FETCH_STATUS=0
+run_fetch() {
+    local remote_name="$1" host="${2:-}" token="${3:-}" args=(-C "$repo" fetch)
+    if [[ "$remote_name" == '--all' ]]; then args+=(--all); else args+=("$remote_name"); fi
+    args+=("${prune_args[@]}")
+    if [[ -n "$token" ]]; then
+        if FETCH_OUTPUT="$(LC_ALL=C LANG=C GH_TOKEN="$token" GH_HOST="$host" \
+            GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git "${args[@]}" 2>&1)"; then
+            FETCH_STATUS=0
+        else
+            FETCH_STATUS=$?
+        fi
+    else
+        if FETCH_OUTPUT="$(LC_ALL=C LANG=C git "${args[@]}" 2>&1)"; then
+            FETCH_STATUS=0
+        else
+            FETCH_STATUS=$?
+        fi
+    fi
+}
+
+account_hosts=(); account_names=(); account_active=()
+if [[ "$no_account_resolve" == "0" ]] && have_cmd gh; then
+    while IFS="$SHM_FS" read -r host account active; do
+        [[ -n "$host" && -n "$account" ]] || continue
+        account_hosts+=("$host"); account_names+=("$account"); account_active+=("$active")
+    done < <(git_github_accounts)
+fi
+
+declare -A plan_host=() plan_owner=() plan_explicit=()
+if [[ "$no_account_resolve" == "0" ]] && have_cmd gh &&
+    [[ ${#account_hosts[@]} -gt 0 || ${#explicit_accounts[@]} -gt 0 ]]; then
+    remote_names=()
+    if [[ -n "$remote" ]]; then
+        remote_names=("$remote")
+    else
+        mapfile -t remote_names < <(git -C "$repo" remote 2>/dev/null)
+    fi
+    for remote_name in "${remote_names[@]}"; do
+        url="$(git -C "$repo" remote get-url "$remote_name" 2>/dev/null || true)"
+        info="$(git_github_remote_info "$url" 2>/dev/null || true)"
+        [[ -n "$info" ]] || continue
+        IFS="$SHM_FS" read -r host owner <<< "$info"
+        key="${host,,}/${owner,,}"
+        count=0
+        for i in "${!account_hosts[@]}"; do
+            [[ "${account_hosts[$i]}" == "$host" ]] && count=$((count + 1))
+        done
+        explicit="${explicit_accounts[$key]:-}"
+        if [[ -n "$explicit" || "$count" -gt 1 ]]; then
+            plan_host["$remote_name"]="$host"
+            plan_owner["$remote_name"]="$owner"
+            plan_explicit["$remote_name"]="$explicit"
+        fi
+    done
+else
+    remote_names=()
+fi
+
+all_output=''; failed=0
+append_output() {
+    [[ -n "$FETCH_OUTPUT" ]] || return 0
+    all_output+="${all_output:+$'\n'}$FETCH_OUTPUT"
+}
+
+if [[ ${#plan_host[@]} -eq 0 ]]; then
+    run_fetch "${remote:---all}"
+    append_output
+    if [[ "$FETCH_STATUS" -ne 0 ]]; then
+        [[ -n "$FETCH_OUTPUT" ]] && printf '%s\n' "$FETCH_OUTPUT" >&2
+        failed=1
+    fi
+else
+    for remote_name in "${remote_names[@]}"; do
+        if [[ -z "${plan_host[$remote_name]:-}" ]]; then
+            run_fetch "$remote_name"
+            append_output
+            if [[ "$FETCH_STATUS" -ne 0 ]]; then
+                failed=1
+                printf '%s\n' "$FETCH_OUTPUT" >&2
+            fi
+            continue
+        fi
+
+        host="${plan_host[$remote_name]}"; owner="${plan_owner[$remote_name]}"
+        cache_key="${host,,}/${owner,,}"
+        candidates=()
+        add_candidate() {
+            local value="$1" seen
+            [[ -n "$value" ]] || return 0
+            for seen in "${candidates[@]}"; do [[ "$seen" == "$value" ]] && return 0; done
+            candidates+=("$value")
+        }
+        add_candidate "${plan_explicit[$remote_name]:-}"
+        add_candidate "${account_cache[$cache_key]:-}"
+        for i in "${!account_hosts[@]}"; do
+            [[ "${account_hosts[$i]}" == "$host" && "${account_active[$i]}" == "1" ]] &&
+                add_candidate "${account_names[$i]}"
+        done
+        for i in "${!account_hosts[@]}"; do
+            [[ "${account_hosts[$i]}" == "$host" ]] && add_candidate "${account_names[$i]}"
+        done
+
+        attempted=0; got_token=0; remote_done=0; last_auth_output=''; last_auth_status=1
+        for account in "${candidates[@]}"; do
+            git_validate_github_account "$account" || continue
+            attempted=1
+            token="$(gh auth token --hostname "$host" --user "$account" 2>/dev/null || true)"
+            token="${token//$'\r'/}"; token="${token//$'\n'/}"
+            [[ -n "$token" ]] || continue
+            got_token=1
+            run_fetch "$remote_name" "$host" "$token"
+            if [[ "$FETCH_STATUS" -eq 0 ]]; then
+                account_cache["$cache_key"]="$account"
+                log_verbose "Fetched $host/$owner using gh account '$account'."
+                append_output
+                remote_done=1
+                break
+            fi
+            if ! git_is_auth_failure "$FETCH_OUTPUT"; then
+                append_output
+                printf '%s\n' "$FETCH_OUTPUT" >&2
+                failed=1; remote_done=1
+                break
+            fi
+            last_auth_output="$FETCH_OUTPUT"; last_auth_status="$FETCH_STATUS"
+            log_verbose "gh account '$account' cannot access $host/$owner; trying next."
+        done
+
+        if [[ "$remote_done" == "0" && ( "$attempted" == "0" || "$got_token" == "0" ) ]]; then
+            run_fetch "$remote_name"
+            append_output
+            if [[ "$FETCH_STATUS" -ne 0 ]]; then
+                failed=1
+                printf '%s\n' "$FETCH_OUTPUT" >&2
+            fi
+        elif [[ "$remote_done" == "0" ]]; then
+            FETCH_OUTPUT="$last_auth_output"; FETCH_STATUS="$last_auth_status"
+            append_output
+            [[ -n "$FETCH_OUTPUT" ]] && printf '%s\n' "$FETCH_OUTPUT" >&2
+            failed=1
+        fi
+    done
+fi
+
+results=()
 set_tracking_for_pruned() {
-    local deleted_ref="$1"
+    local deleted_ref="$1" remote_name branch_name existing
     if [[ "$deleted_ref" =~ ^([^/]+)/(.+)$ ]]; then
-        local remote_name="${BASH_REMATCH[1]}" branch_name="${BASH_REMATCH[2]}"
-        local existing
-        existing="$(git config --get "branch.$branch_name.remote" 2>/dev/null || true)"
-        if [[ -z "$existing" ]] && git rev-parse --verify "refs/heads/$branch_name" >/dev/null 2>&1; then
-            git config "branch.$branch_name.remote" "$remote_name"
-            git config "branch.$branch_name.merge" "refs/heads/$branch_name"
+        remote_name="${BASH_REMATCH[1]}"; branch_name="${BASH_REMATCH[2]}"
+        existing="$(git -C "$repo" config --get "branch.$branch_name.remote" 2>/dev/null || true)"
+        if [[ -z "$existing" ]] &&
+            git -C "$repo" rev-parse --verify "refs/heads/$branch_name" >/dev/null 2>&1; then
+            git -C "$repo" config "branch.$branch_name.remote" "$remote_name"
+            git -C "$repo" config "branch.$branch_name.merge" "refs/heads/$branch_name"
             log_verbose "Set tracking config on '$branch_name' -> '$remote_name/$branch_name' (pruned)."
         fi
     fi
@@ -74,31 +228,35 @@ set_tracking_for_pruned() {
 while IFS= read -r line; do
     text="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
     if [[ "$text" =~ ^\*[[:space:]]+\[new\ (branch|tag)\][[:space:]]+[^[:space:]]+[[:space:]]+-\>[[:space:]]+([^[:space:]]+) ]]; then
-        results+=("New ${BASH_REMATCH[1]}"$'\t'"${BASH_REMATCH[2]}"$'\t'"$text")
+        results+=("New ${BASH_REMATCH[1]}$SHM_FS${BASH_REMATCH[2]}$SHM_FS$text")
     elif [[ "$text" =~ ^-[[:space:]]+\[deleted\].*-\>[[:space:]]+([^[:space:]]+) ]]; then
         ref="${BASH_REMATCH[1]}"
-        results+=("Deleted"$'\t'"$ref"$'\t'"$text")
+        results+=("Deleted$SHM_FS$ref$SHM_FS$text")
         set_tracking_for_pruned "$ref"
     elif [[ "$text" =~ ^\+[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+-\>[[:space:]]+([^[:space:]]+) ]]; then
-        results+=("Forced update"$'\t'"${BASH_REMATCH[1]}"$'\t'"$text")
+        results+=("Forced update$SHM_FS${BASH_REMATCH[1]}$SHM_FS$text")
     elif [[ "$text" =~ ^[0-9a-f]+\.\.[0-9a-f]+[[:space:]]+[^[:space:]]+[[:space:]]+-\>[[:space:]]+([^[:space:]]+) ]]; then
-        results+=("Updated"$'\t'"${BASH_REMATCH[1]}"$'\t'"$text")
+        results+=("Updated$SHM_FS${BASH_REMATCH[1]}$SHM_FS$text")
     fi
-done <<< "$output"
+done <<< "$all_output"
 
 if [[ "$JSON" == "1" ]]; then
-    if [[ ${#results[@]} -eq 0 ]]; then
-        echo '[]'
-    else
-        printf '%s\n' "${results[@]}" | jq -R -s 'split("\n") | map(select(length>0) |
-            split("\t") | {action:.[0], ref:.[1], summary:.[2]})'
+    if [[ ${#results[@]} -eq 0 ]]; then echo '[]'; else
+        printf '%s\n' "${results[@]}" | jq -R -s --arg fs "$SHM_FS" '
+            split("\n") | map(select(length>0) | split($fs) |
+            {action:.[0], ref:.[1], summary:.[2]})'
     fi
-else
-    if [[ ${#results[@]} -gt 0 ]]; then
-        printf '%-16s %s\n' 'ACTION' 'REF'
-        for r in "${results[@]}"; do
-            IFS=$'\t' read -r action ref _ <<< "$r"
-            printf '%-16s %s\n' "$action" "$ref"
-        done
+elif [[ ${#results[@]} -gt 0 ]]; then
+    printf '%-16s %s\n' 'ACTION' 'REF'
+    for row in "${results[@]}"; do
+        IFS="$SHM_FS" read -r action ref _ <<< "$row"
+        printf '%-16s %s\n' "$action" "$ref"
+    done
+fi
+
+if [[ "$failed" != "0" ]]; then
+    if [[ ${#plan_host[@]} -eq 0 ]]; then
+        die "git fetch failed (exit $FETCH_STATUS)."
     fi
+    die 'One or more git remotes failed to fetch.'
 fi

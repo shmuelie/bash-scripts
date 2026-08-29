@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# git-worktree-lock — lock a worktree by actual branch or path.
+# Ported from Lock-Worktree.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { echo 'Usage: git-worktree-lock [-C <repository>] [--path] [--reason <text>] <branch-or-path>'; }
+repo_arg=''; value=''; reason=''; mode='auto'
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -C|--repository-path) repo_arg="$2"; shift 2 ;;
+        --path) mode='path'; shift ;;
+        --reason) reason="$2"; shift 2 ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        -v|--verbose) VERBOSE=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *) [[ -z "$value" ]] || die "Unexpected argument: $1"; value="$1"; shift ;;
+    esac
+done
+[[ -n "$value" ]] || { usage >&2; exit 2; }
+require_cmd git
+repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
+row="$(git_resolve_worktree_target "$repo" "$mode" "$value")" || exit 1
+path="${row%%"$SHM_FS"*}"
+should_process "Lock worktree at $path" || exit 0
+args=(-C "$repo" worktree lock)
+[[ -n "$reason" ]] && args+=(--reason "$reason")
+args+=(-- "$path")
+git "${args[@]}"

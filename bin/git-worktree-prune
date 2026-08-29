@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# git-worktree-prune — prune stale worktree administrative entries.
+# Ported from Remove-StaleWorktree.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { echo 'Usage: git-worktree-prune [--path <repository>] [--expire <time>] [--dry-run]'; }
+repo_arg=''; expire=''
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --path|-C) repo_arg="$2"; shift 2 ;;
+        --expire) expire="$2"; shift 2 ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        -v|--verbose) VERBOSE=1; shift ;;
+        *) die "Unknown argument: $1" ;;
+    esac
+done
+require_cmd git
+repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
+args=(-C "$repo" worktree prune --verbose)
+[[ "$DRY_RUN" == "1" ]] && args+=(--dry-run)
+[[ -n "$expire" ]] && args+=(--expire "$expire")
+git "${args[@]}"

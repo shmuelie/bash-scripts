@@ -1,0 +1,251 @@
+#!/usr/bin/env bash
+# git-worktree-update-all — update repositories below a source root.
+# Ported from Update-AllWorktrees.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { cat <<'EOF'
+Usage: git-worktree-update-all [options]
+
+Options:
+  --path <root>                       Root to scan (SOURCE_REPOS, then cwd).
+  --organization <glob[,glob...]>     Organization filters (repeatable).
+  --name <glob[,glob...]>             Repository-name filters (repeatable).
+  --exclude <glob[,glob...]>          Exclusions for org, repo, or org/repo.
+  --jobs <n>                          Concurrent repositories (default: 4).
+  --check-remote                      Forward remote branch checks.
+  --github-account <host/owner=account>
+                                       Forward account mapping (repeatable).
+  --no-github-account-resolve          Disable account-aware fetch.
+  --changed-only                       Flatten actionable result rows.
+  --json                               Emit JSON.
+  --dry-run, --whatif                  Preview repositories without updating.
+EOF
+}
+
+root_arg=''; jobs=4; check_remote=0; changed_only=0; no_account_resolve=0
+organization_args=(); name_args=(); exclude_args=(); github_accounts=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --path|-C) root_arg="$2"; shift 2 ;;
+        --organization) organization_args+=("$2"); shift 2 ;;
+        --name) name_args+=("$2"); shift 2 ;;
+        --exclude) exclude_args+=("$2"); shift 2 ;;
+        --jobs) jobs="$2"; shift 2 ;;
+        --check-remote) check_remote=1; shift ;;
+        --github-account) github_accounts+=("$2"); shift 2 ;;
+        --no-github-account-resolve) no_account_resolve=1; shift ;;
+        --changed-only) changed_only=1; shift ;;
+        --json) JSON=1; shift ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        -v|--verbose) VERBOSE=1; shift ;;
+        *) die "Unknown argument: $1" ;;
+    esac
+done
+
+[[ "$jobs" =~ ^[0-9]+$ && "$jobs" -ge 1 && "$jobs" -le 128 ]] ||
+    die '--jobs must be an integer from 1 through 128.'
+for mapping in "${github_accounts[@]}"; do
+    git_validate_github_mapping "$mapping" ||
+        die "Invalid --github-account '$mapping'; expected safe host/owner=account."
+done
+require_cmd git
+require_cmd jq
+root="${root_arg:-${SOURCE_REPOS:-$(pwd -P)}}"
+[[ -d "$root" ]] || die "Repository root not found: $root"
+root="$(cd "$root" && pwd -P)"
+
+expand_patterns() {
+    local value part
+    for value in "$@"; do
+        IFS=',' read -r -a parts <<< "$value"
+        for part in "${parts[@]}"; do
+            part="${part#"${part%%[![:space:]]*}"}"
+            part="${part%"${part##*[![:space:]]}"}"
+            [[ -n "$part" ]] && printf '%s\n' "$part"
+        done
+    done
+}
+mapfile -t organization_patterns < <(expand_patterns "${organization_args[@]}")
+mapfile -t name_patterns < <(expand_patterns "${name_args[@]}")
+mapfile -t exclude_patterns < <(expand_patterns "${exclude_args[@]}")
+
+matches_any() {
+    local candidate pattern
+    candidate="$1"; shift
+    [[ $# -gt 0 ]] || return 0
+    local old_nocase=0
+    shopt -q nocasematch && old_nocase=1
+    shopt -s nocasematch
+    for pattern in "$@"; do
+        # shellcheck disable=SC2053 # Intentional PowerShell -like glob semantics.
+        if [[ "$candidate" == $pattern ]]; then
+            [[ "$old_nocase" == "0" ]] && shopt -u nocasematch
+            return 0
+        fi
+    done
+    [[ "$old_nocase" == "0" ]] && shopt -u nocasematch
+    return 1
+}
+
+is_excluded() {
+    local org="$1" repo_name="$2" pattern candidate old_nocase=0
+    [[ ${#exclude_patterns[@]} -gt 0 ]] || return 1
+    shopt -q nocasematch && old_nocase=1
+    shopt -s nocasematch
+    for pattern in "${exclude_patterns[@]}"; do
+        for candidate in "$org" "$repo_name" "$org/$repo_name"; do
+            # shellcheck disable=SC2053 # Intentional PowerShell -like glob semantics.
+            if [[ "$candidate" == $pattern ]]; then
+                [[ "$old_nocase" == "0" ]] && shopt -u nocasematch
+                return 0
+            fi
+        done
+    done
+    [[ "$old_nocase" == "0" ]] && shopt -u nocasematch
+    return 1
+}
+
+repositories=()
+declare -A seen_repositories=()
+while IFS= read -r git_marker; do
+    wt_path="$(dirname -- "$git_marker")"
+    relative="${wt_path#"$root"}"; relative="${relative#/}"
+    IFS='/' read -r -a segments <<< "$relative"
+    if [[ -z "$relative" ]]; then
+        org="$(basename -- "$(dirname -- "$wt_path")")"
+        repo_name="$(basename -- "$wt_path")"
+    elif [[ ${#segments[@]} -ge 2 ]]; then
+        org="${segments[0]}"; repo_name="${segments[1]}"
+    else
+        org="$(basename -- "$root")"; repo_name="${segments[0]}"
+    fi
+    key="${org,,}/${repo_name,,}"
+    [[ -z "${seen_repositories[$key]:-}" ]] || continue
+    matches_any "$org" "${organization_patterns[@]}" || continue
+    matches_any "$repo_name" "${name_patterns[@]}" || continue
+    is_excluded "$org" "$repo_name" && continue
+    seen_repositories["$key"]=1
+    repositories+=("$org$SHM_FS$repo_name$SHM_FS$wt_path")
+done < <(find "$root" -name .git -print -prune 2>/dev/null | sort)
+
+[[ ${#repositories[@]} -gt 0 ]] || { [[ "$JSON" == "1" ]] && echo '[]'; exit 0; }
+
+umask 077
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/git-worktree-update-all.XXXXXX")" ||
+    die 'Could not create a secure worker directory.'
+# shellcheck disable=SC2329  # invoked indirectly by the trap below
+cleanup() { rm -rf -- "$scratch"; }
+trap cleanup EXIT HUP INT TERM
+
+pids=(); orgs=(); names=(); paths=(); raw_files=(); err_files=(); code_files=()
+active_pids=()
+for i in "${!repositories[@]}"; do
+    IFS="$SHM_FS" read -r org repo_name repo_path <<< "${repositories[$i]}"
+    orgs[i]="$org"; names[i]="$repo_name"; paths[i]="$repo_path"
+    raw_files[i]="$scratch/$i.raw"; err_files[i]="$scratch/$i.err"; code_files[i]="$scratch/$i.code"
+
+    if [[ "$DRY_RUN" == "1" ]]; then
+        should_process "Update all worktrees for $org/$repo_name" || true
+        printf '[]\n' > "${raw_files[$i]}"
+        printf '0\n' > "${code_files[$i]}"
+        : > "${err_files[$i]}"
+        continue
+    fi
+
+    update_args=(--path "$repo_path" --json)
+    [[ "$check_remote" == "1" ]] && update_args+=(--check-remote)
+    [[ "$no_account_resolve" == "1" ]] && update_args+=(--no-github-account-resolve)
+    [[ "$VERBOSE" == "1" ]] && update_args+=(--verbose)
+    for mapping in "${github_accounts[@]}"; do update_args+=(--github-account "$mapping"); done
+
+    (
+        set +e
+        "$_SHM_ROOT/bin/git-worktree-update" "${update_args[@]}" \
+            > "${raw_files[$i]}" 2> "${err_files[$i]}"
+        printf '%s\n' "$?" > "${code_files[$i]}"
+    ) &
+    pids[i]=$!
+    active_pids+=("${pids[$i]}")
+    if [[ ${#active_pids[@]} -ge "$jobs" ]]; then
+        wait "${active_pids[0]}" || true
+        active_pids=("${active_pids[@]:1}")
+    fi
+done
+for pid in "${active_pids[@]}"; do wait "$pid" || true; done
+
+result_files=()
+any_failed=0
+for i in "${!repositories[@]}"; do
+    result_file="$scratch/$i.result"; result_files+=("$result_file")
+    code="$(cat "${code_files[$i]}")"
+    error_text="$(cat "${err_files[$i]}")"
+    [[ -z "$error_text" ]] || printf '%s\n' "$error_text" >&2
+    if [[ "$DRY_RUN" == "1" ]]; then
+        status='WhatIf'; worktrees='[]'; error_text=''
+    elif [[ -s "${raw_files[$i]}" ]] &&
+        jq -e 'type=="array"' "${raw_files[$i]}" >/dev/null 2>&1; then
+        worktrees="$(cat "${raw_files[$i]}")"
+        if [[ "$code" != "0" ]] ||
+            jq -e 'any(.[]; .status=="Failed" or .status=="StashFailed" or .status=="Missing")' "${raw_files[$i]}" >/dev/null; then
+            status='Failed'
+            [[ -n "$error_text" ]] || error_text='One or more worktrees reported a failure.'
+        else
+            status='Completed'
+        fi
+    else
+        status='Failed'; worktrees='[]'
+        [[ -n "$error_text" ]] || error_text="git-worktree-update exited with status $code."
+    fi
+    [[ "$status" == "Failed" ]] && any_failed=1
+    jq -n --arg organization "${orgs[$i]}" --arg repository "${names[$i]}" \
+        --arg path "${paths[$i]}" --arg status "$status" --arg error "$error_text" \
+        --argjson worktrees "$worktrees" '
+        def nz: if .=="" then null else . end;
+        {organization:$organization, repository:$repository, path:$path,
+         status:$status, worktrees:$worktrees, error:($error|nz)}' > "$result_file"
+done
+
+all_json="$(jq -s '.' "${result_files[@]}")"
+if [[ "$changed_only" == "1" ]]; then
+    all_json="$(printf '%s' "$all_json" | jq '
+        [ .[] as $repo |
+          if $repo.status == "WhatIf" then
+            {organization:$repo.organization, repository:$repo.repository,
+             branch:null, status:"WhatIf", behindBy:0, path:$repo.path, error:null}
+          else
+            ($repo.worktrees[] |
+             select(.status=="Updated" or .status=="Removed" or
+                    .status=="Failed" or .status=="StashFailed") |
+             {organization:$repo.organization, repository:$repo.repository,
+              branch:.branch, status:.status, behindBy:.behindBy, path:.path,
+              error:(if .status=="Failed" or .status=="StashFailed" then $repo.error else null end)}),
+            (if $repo.status=="Failed" and
+                ([$repo.worktrees[] | select(.status=="Failed" or .status=="StashFailed")] | length)==0
+             then {organization:$repo.organization, repository:$repo.repository,
+                   branch:null, status:"Failed", behindBy:0, path:$repo.path, error:$repo.error}
+             else empty end)
+          end ]')"
+fi
+
+if [[ "$JSON" == "1" ]]; then
+    printf '%s\n' "$all_json"
+elif [[ "$changed_only" == "1" ]]; then
+    printf '%-20s %-24s %-30s %-12s %-7s %s\n' 'ORGANIZATION' 'REPOSITORY' 'BRANCH' 'STATUS' 'BEHIND' 'PATH'
+    while IFS="$SHM_FS" read -r org repo_name branch status behind path; do
+        printf '%-20s %-24s %-30s %-12s %-7s %s\n' "$org" "$repo_name" "$branch" "$status" "$behind" "$path"
+    done < <(printf '%s' "$all_json" | jq -r --arg fs "$SHM_FS" \
+        '.[] | [.organization,.repository,(.branch//""),.status,.behindBy,.path] | join($fs)')
+else
+    while IFS="$SHM_FS" read -r org repo_name path status; do
+        printf '%s/%s  [%s]  %s\n' "$org" "$repo_name" "$status" "$path"
+        printf '%s' "$all_json" | jq -r --arg org "$org" --arg repo "$repo_name" \
+            '.[] | select(.organization==$org and .repository==$repo) | .worktrees[] |
+             "  \(.branch // "(detached)")  \(.status)  \(.path)"'
+    done < <(printf '%s' "$all_json" | jq -r --arg fs "$SHM_FS" \
+        '.[] | [.organization,.repository,.path,.status] | join($fs)')
+fi
+exit "$any_failed"

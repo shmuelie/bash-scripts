@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# git-worktree-remove — remove a worktree by branch name.
-# Ported from Remove-Worktree. Accepts a branch as an argument or on stdin
-# (one per line, e.g. piped from git-stale-branch).
+# git-worktree-remove — remove a worktree by its actual branch or path.
+# Ported from Remove-Worktree.
 set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
@@ -9,65 +8,70 @@ source "$_SHM_ROOT/lib/git/git-common.sh"
 
 usage() { cat <<'EOF'
 Usage: git-worktree-remove [options] [branch]
-
-Remove a worktree by branch name. Reads branch names from stdin when none is
-given as an argument.
+       git-worktree-remove [options] --path <worktree-path>
 
 Options:
-  --delete-branch     Also delete the branch after removing its worktree.
-  --force             Force removal of the worktree.
-  --dry-run, --whatif Preview without removing.
-  -v, --verbose       Verbose output.
+  --path <worktree-path>             Address the actual worktree path.
+  -C, --repository-path <path>       Repository used to resolve the target.
+  --delete-branch                    Delete the backing branch after removal.
+  --force                            Force removal.
+  --dry-run, --whatif                Preview without removing.
+  -v, --verbose                      Verbose output.
 EOF
 }
 
-delete_branch=0; force=0; branch=''
+delete_branch=0; force=0; branch=''; target_path=''; repo_arg=''
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
+        --path) target_path="$2"; shift 2 ;;
+        -C|--repository-path) repo_arg="$2"; shift 2 ;;
         --delete-branch) delete_branch=1; shift ;;
         --force) force=1; shift ;;
         --dry-run|--whatif) DRY_RUN=1; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
         -*) die "Unknown option: $1" ;;
-        *) branch="$1"; shift ;;
+        *) [[ -z "$branch" ]] || die "Unexpected argument: $1"; branch="$1"; shift ;;
     esac
 done
-
+[[ -z "$branch" || -z "$target_path" ]] || die 'Specify either a branch or --path, not both.'
 require_cmd git
+repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
 
 remove_one() {
-    local branch="$1" worktree_path
-    [[ -n "$branch" ]] || return 0
-    worktree_path="$(git_worktree_path "$branch")" || { log_error 'Not in a git repository.'; return 1; }
-
-    if ! should_process "Remove worktree at $worktree_path (branch '$branch')"; then
-        return 0
+    local mode="$1" value="$2" row wt_path wt_branch detached args
+    row="$(git_resolve_worktree_target "$repo" "$mode" "$value")" || return 1
+    IFS="$SHM_FS" read -r wt_path _ wt_branch _ detached _ <<< "$row"
+    should_process "Remove worktree at $wt_path (branch '$wt_branch')" || return 0
+    args=(-C "$repo" worktree remove)
+    [[ "$force" == "1" ]] && args+=(--force)
+    args+=(-- "$wt_path")
+    if ! git "${args[@]}"; then
+        [[ "$delete_branch" == "1" && "$detached" != "1" ]] &&
+            log_warn "Worktree removal failed; leaving branch '$wt_branch' in place."
+        return 1
     fi
-
-    local removed=0
-    if [[ "$force" == "1" ]]; then
-        git worktree remove "$worktree_path" --force && removed=1 || removed=0
-    else
-        git worktree remove "$worktree_path" && removed=1 || removed=0
-    fi
-
     if [[ "$delete_branch" == "1" ]]; then
-        if [[ "$removed" == "1" ]]; then
-            git branch -D "$branch"
+        if [[ "$detached" == "1" || -z "$wt_branch" || "$wt_branch" == '(detached)' ]]; then
+            log_warn 'The target worktree is detached; no branch was removed.'
         else
-            log_warn "Worktree removal failed; leaving branch '$branch' in place."
+            git -C "$repo" branch -D -- "$wt_branch"
         fi
     fi
 }
 
-if [[ -n "$branch" ]]; then
-    remove_one "$branch"
+if [[ -n "$target_path" ]]; then
+    remove_one path "$target_path"
+elif [[ -n "$branch" ]]; then
+    remove_one branch "$branch"
 elif [[ ! -t 0 ]]; then
-    while IFS=$'\t' read -r piped _; do
-        remove_one "$piped"
+    batch_status=0
+    while IFS="$SHM_FS"$'\t' read -r piped _; do
+        [[ -n "$piped" ]] || continue
+        remove_one branch "$piped" || batch_status=1
     done
+    exit "$batch_status"
 else
     usage >&2
-    die 'No branch specified.'
+    die 'No branch or worktree path specified.'
 fi

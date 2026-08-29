@@ -1,35 +1,50 @@
 #!/usr/bin/env bash
-# git-worktree-list — list worktrees for the current repository.
-# Ported from Get-Worktrees. Outputs a table by default, JSON with --json.
+# git-worktree-list — list worktrees and their complete porcelain state.
+# Ported from Get-Worktrees.
 set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
 source "$_SHM_ROOT/lib/git/git-common.sh"
 
 usage() { cat <<'EOF'
-Usage: git-worktree-list [--json]
+Usage: git-worktree-list [--path <repository-or-child>] [--json]
 
-List all worktrees for the current repository (path, commit, branch).
+List all worktrees, including bare, detached, locked, and prunable state.
 EOF
 }
 
-for arg in "$@"; do
-    case "$arg" in
+repo_arg=''
+while [[ $# -gt 0 ]]; do
+    case "$1" in
         -h|--help) usage; exit 0 ;;
-        --json) JSON=1 ;;
-        *) die "Unknown argument: $arg" ;;
+        --path|-C) repo_arg="$2"; shift 2 ;;
+        --json) JSON=1; shift ;;
+        *) die "Unknown argument: $1" ;;
     esac
 done
 
 require_cmd git
+repo="$(git_resolve_repository_path "${repo_arg:-.}" 1)" || exit 1
 
 if [[ "$JSON" == "1" ]]; then
     require_cmd jq
-    git_worktrees | jq -R -s 'split("\n") | map(select(length>0) | split("\t") |
-        {path: .[0], commit: .[1], branch: .[2]})'
+    git_worktrees "$repo" | jq -R -s --arg fs "$SHM_FS" '
+        def nz: if .=="" then null else . end;
+        split("\n") | map(select(length>0) | split($fs) |
+        {path:.[0], commit:.[1], branch:(.[2]|nz),
+         bare:(.[3]=="1"), detached:(.[4]=="1"), locked:(.[5]=="1"),
+         lockReason:.[6], prunable:(.[7]=="1"),
+         prunableReason:.[8]})'
 else
-    printf '%-60s %-12s %s\n' 'PATH' 'COMMIT' 'BRANCH'
-    while IFS=$'\t' read -r path commit branch; do
-        printf '%-60s %-12s %s\n' "$path" "${commit:0:12}" "$branch"
-    done < <(git_worktrees)
+    printf '%-48s %-12s %-28s %-10s %s\n' 'PATH' 'COMMIT' 'BRANCH' 'STATE' 'REASON'
+    while IFS="$SHM_FS" read -r path commit branch bare detached locked lock_reason prunable prunable_reason; do
+        state=''
+        [[ "$bare" == "1" ]] && state="${state:+$state,}bare"
+        [[ "$detached" == "1" ]] && state="${state:+$state,}detached"
+        [[ "$locked" == "1" ]] && state="${state:+$state,}locked"
+        [[ "$prunable" == "1" ]] && state="${state:+$state,}prunable"
+        reason="$lock_reason"
+        [[ -n "$prunable_reason" ]] && reason="${reason:+$reason; }$prunable_reason"
+        printf '%-48s %-12s %-28s %-10s %s\n' "$path" "${commit:0:12}" "$branch" "$state" "$reason"
+    done < <(git_worktrees "$repo")
 fi
