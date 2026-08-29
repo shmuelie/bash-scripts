@@ -9,7 +9,7 @@ executable in `bin/`.
 | Area | Command |
 |---|---|
 | Launcher | `start-copilot`, `copilot-launch-plan` |
-| Sessions | `copilot-session list/resume/rename/remove` |
+| Sessions | `copilot-session list/select/resume/rename/remove` |
 | Session maintenance | `copilot-session-maintenance merge/compress/repair-events` |
 | Plugins | `copilot-plugin list/install/update/uninstall` |
 | Marketplaces | `copilot-marketplace list/add/remove/browse` |
@@ -27,6 +27,9 @@ Wraps `copilot` and adds:
   resume and the picker; `--resume-session` remains explicit and takes priority.
 - **Sensible defaults** (`--allow-all --experimental`), each disablable with
   `--no-allow-all` / `--no-experimental`.
+- **Approval/output controls** — `--assisted-approval`,
+  `--allow-all-tools` (suppresses the broader default `--allow-all`), and
+  `--usage-output-file <path>`.
 - **Default deny rules** for destructive git operations (force push, hard
   reset, rebase, amend, `git pull`, and similar); disable with
   `--no-default-deny-tools`.
@@ -63,8 +66,24 @@ directory:
 | `false` | Left to the CLI's native lazy handling. |
 | `["glob", ...]` | Enabled only when the current directory matches a glob. |
 
-Use `--enable-mcp-server <name>` to force one on, `--disable-mcp-server <name>`
-to force one off.
+Use `--enable-mcp-server <name>` to force one on and forward the CLI's native
+enable flag, or `--disable-mcp-server <name>` to force one off.
+
+## Global session selection
+
+`copilot-session select` searches all recorded sessions, filters by
+`--id`, `--repository`, or `--branch` globs, and resumes from the selected
+session's recorded directory:
+
+```bash
+copilot-session select
+copilot-session select --repository 'shmuelie/*' --branch main --first 1
+copilot-session select --stay-in-directory "continue" -- --model fast
+copilot-session select --dry-run --first 1
+```
+
+Multiple matches use the configured fzf/console picker. Dry-run requires the
+filters or `--first 1` to resolve exactly one session and never opens a picker.
 
 ## Directory changes
 
@@ -93,6 +112,10 @@ copilot-session-maintenance merge <id1> <id2> --remove-source
 or truncated JSONL lines when a valid session remains and report the count.
 Commands that rewrite existing files create `.bak` copies unless
 `--no-backup` is supplied.
+
+All destructive session operations resolve IDs through a canonical direct-child
+guard under `COPILOT_HOME/session-state`; path-like IDs and symlink escapes are
+rejected. Failed merges clean their partial destination and preserve sources.
 
 ## Requirements
 

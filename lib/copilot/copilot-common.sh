@@ -28,6 +28,51 @@ copilot_session_state_dir() {
     printf '%s/session-state\n' "$(copilot_home)"
 }
 
+# copilot_validate_session_id ID [QUIET] — require one safe path component.
+copilot_validate_session_id() {
+    local id="${1:-}" quiet="${2:-0}"
+    if [[ -z "${id//[[:space:]]/}" || "$id" == "." || "$id" == ".." ||
+          "$id" == *"/"* || "$id" == *"\\"* || "$id" == *":"* ]]; then
+        [[ "$quiet" == "1" ]] || log_error "Invalid Copilot session id: '$id'."
+        return 1
+    fi
+}
+
+# copilot_resolve_session_dir ID [QUIET] — print the canonical directory for an
+# existing session. Session IDs are names, never paths, and session directories
+# must be real direct children of session-state (not symlinks).
+copilot_resolve_session_dir() {
+    local id="${1:-}" quiet="${2:-0}" state_dir state_real candidate resolved
+    copilot_validate_session_id "$id" "$quiet" || return 1
+
+    state_dir="$(copilot_session_state_dir)"
+    if [[ ! -d "$state_dir" ]]; then
+        [[ "$quiet" == "1" ]] || log_error "Copilot session state directory not found: $state_dir"
+        return 1
+    fi
+    state_real="$(cd -- "$state_dir" && pwd -P)" || return 1
+    candidate="$state_real/$id"
+
+    if [[ -L "$candidate" ]]; then
+        [[ "$quiet" == "1" ]] ||
+            log_error "Session '$id' is not a canonical direct child of $state_real."
+        return 1
+    fi
+    if [[ ! -d "$candidate" ]]; then
+        [[ "$quiet" == "1" ]] || log_error "Session '$id' not found."
+        return 1
+    fi
+
+    resolved="$(cd -- "$candidate" && pwd -P)" || return 1
+    if [[ "$(dirname -- "$resolved")" != "$state_real" ||
+          "$(basename -- "$resolved")" != "$id" ]]; then
+        [[ "$quiet" == "1" ]] ||
+            log_error "Session '$id' is not a canonical direct child of $state_real."
+        return 1
+    fi
+    printf '%s\n' "$resolved"
+}
+
 # resolve_copilot — print the path to the copilot executable, or die.
 resolve_copilot() {
     local exe
@@ -81,6 +126,7 @@ copilot_sessions() {
         dir="${dir%/}"
         local id; id="$(basename -- "$dir")"
         [[ -n "$only_id" && "$id" != "$only_id" ]] && continue
+        dir="$(copilot_resolve_session_dir "$id" 1)" || continue
         ws="$dir/workspace.yaml"
         [[ -f "$ws" ]] || continue
 

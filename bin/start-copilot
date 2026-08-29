@@ -9,12 +9,22 @@ source "$_SHM_ROOT/lib/common.sh"
 source "$_SHM_ROOT/lib/copilot/copilot-common.sh"
 source "$_SHM_ROOT/lib/copilot/launch-plan.sh"
 
-# Pull out launcher-owned flags (--passthru, --dry-run/--whatif) before delegating.
-args=(); passthru=0
+# Pull out launcher-owned flags before delegating, without consuming a value
+# that happens to have the same spelling or anything after `--`.
+args=(); passthru=0; saw_ddash=0
 while [[ $# -gt 0 ]]; do
+    if [[ "$saw_ddash" == "1" ]]; then
+        args+=("$1"); shift; continue
+    fi
     case "$1" in
+        --) args+=("$1"); saw_ddash=1; shift ;;
         --passthru) passthru=1; shift ;;
         --dry-run|--whatif) DRY_RUN=1; shift ;;
+        --resume-session|--usage-output-file|--enable-mcp-server|--disable-mcp-server|--name|--session-id|--model|--reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format|-C|--change-dir)
+            args+=("$1")
+            shift
+            if [[ $# -gt 0 ]]; then args+=("$1"); shift; fi
+            ;;
         *) args+=("$1"); shift ;;
     esac
 done

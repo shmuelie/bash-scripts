@@ -59,8 +59,13 @@ Defaults (each disablable):
   --no-experimental        Do not pass --experimental.
   --no-default-deny-tools  Do not add the destructive-git deny rules.
 
+Approval and output:
+  --assisted-approval       Use assisted approval (requires experimental mode).
+  --allow-all-tools         Allow tools while retaining path/URL verification.
+  --usage-output-file <p>   Write native usage output to the specified path.
+
 MCP:
-  --enable-mcp-server <n>  Force a server on regardless of its autoConnect policy.
+  --enable-mcp-server <n>  Force a server on and forward the native enable flag.
   --disable-mcp-server <n> Force a server off for this launch.
 
 Convenience passthrough (forwarded to copilot):
@@ -184,6 +189,7 @@ build_launch_plan() {
     local no_resume=0 resume_latest=0 resume_session='' show_picker=0 include_unnamed=0 defer_resume=0
     local session_id_present=0
     local no_allow_all=0 no_experimental=0 no_deny=0
+    local assisted_approval=0
     local enable_mcp=() disable_mcp=() fwd=() passthrough_args=() saw_ddash=0
 
     while [[ $# -gt 0 ]]; do
@@ -202,16 +208,38 @@ build_launch_plan() {
             --no-allow-all) no_allow_all=1; shift ;;
             --no-experimental) no_experimental=1; shift ;;
             --no-default-deny-tools) no_deny=1; shift ;;
-            --enable-mcp-server) enable_mcp+=("$2"); shift 2 ;;
-            --disable-mcp-server) disable_mcp+=("$2"); shift 2 ;;
-            --name) name="$2"; shift 2 ;;
+            --assisted-approval)
+                assisted_approval=1
+                fwd+=("$1")
+                shift ;;
+            --allow-all-tools)
+                no_allow_all=1
+                fwd+=("$1")
+                shift ;;
+            --usage-output-file)
+                [[ $# -ge 2 ]] || die '--usage-output-file requires a path.'
+                fwd+=("$1" "$2")
+                shift 2 ;;
+            --enable-mcp-server)
+                [[ $# -ge 2 ]] || die '--enable-mcp-server requires a server name.'
+                enable_mcp+=("$2")
+                fwd+=("$1" "$2")
+                shift 2 ;;
+            --disable-mcp-server)
+                [[ $# -ge 2 ]] || die '--disable-mcp-server requires a server name.'
+                disable_mcp+=("$2"); shift 2 ;;
+            --name)
+                [[ $# -ge 2 ]] || die '--name requires a value.'
+                name="$2"; shift 2 ;;
             --session-id)
+                [[ $# -ge 2 ]] || die '--session-id requires a value.'
                 session_id_present=1
                 fwd+=("$1" "$2"); shift 2 ;;
             --session-id=*)
                 session_id_present=1
                 fwd+=("$1"); shift ;;
             --model|--reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format|-C|--change-dir)
+                [[ $# -ge 2 ]] || die "$1 requires a value."
                 fwd+=("$1" "$2"); shift 2 ;;
             --plan) fwd+=("$1"); shift ;;
             -h|--help) _launch_plan_usage; return 2 ;;
@@ -219,6 +247,10 @@ build_launch_plan() {
             *) if [[ -z "$prompt" ]]; then prompt="$1"; else fwd+=("$1"); fi; shift ;;
         esac
     done
+
+    if [[ "$assisted_approval" == "1" && "$no_experimental" == "1" ]]; then
+        log_warn '--assisted-approval may not work with --no-experimental.'
+    fi
 
     # Passthrough commands (update/help) bypass the built args entirely.
     if [[ "$prompt" == "update" || "$prompt" == "help" ]]; then
