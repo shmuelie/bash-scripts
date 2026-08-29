@@ -71,8 +71,9 @@ teardown() { rm -rf "$WORK"; }
 }
 
 @test "--update fast-forwards the clone and re-links" {
-    # Build a bare origin, clone it, then push a new commit upstream.
-    git -c init.defaultBranch=main clone --quiet --bare "$REPO_ROOT" "$WORK/origin.git"
+    # Build a bare origin with an explicit branch (CI checks out detached HEAD).
+    git init --quiet --bare --initial-branch=main "$WORK/origin.git"
+    git -C "$REPO_ROOT" push --quiet "$WORK/origin.git" HEAD:refs/heads/main
     git clone --quiet "$WORK/origin.git" "$WORK/clone"
     git -C "$WORK/clone" config user.email t@e.com
     git -C "$WORK/clone" config user.name Tester
@@ -87,8 +88,7 @@ teardown() { rm -rf "$WORK"; }
     chmod +x "$WORK/pusher/bin/brand-new-cmd"
     git -C "$WORK/pusher" add bin/brand-new-cmd
     git -C "$WORK/pusher" commit --quiet -m "add brand-new-cmd"
-    target_branch="$(git -C "$WORK/clone" branch --show-current)"
-    git -C "$WORK/pusher" push --quiet origin "HEAD:$target_branch"
+    git -C "$WORK/pusher" push --quiet origin HEAD:main
 
     before="$(git -C "$WORK/clone" rev-parse HEAD)"
     run "$WORK/clone/install.sh" --update --prefix "$PREFIX" --rc "$RC"
