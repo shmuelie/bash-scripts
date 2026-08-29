@@ -105,7 +105,8 @@ confirm() {
 # --- Interactive selection --------------------------------------------------
 
 # pick_one PROMPT < list — read newline-delimited options on stdin and print the
-# chosen one to stdout. Uses fzf when available, otherwise bash `select`.
+# chosen one to stdout. Uses fzf when available, otherwise bash `select` reading
+# from the controlling terminal (stdin has already been consumed by mapfile).
 pick_one() {
     local prompt="${1:-Select}" options=()
     mapfile -t options
@@ -120,15 +121,20 @@ pick_one() {
         printf '%s\n' "${options[@]}" | fzf --prompt="$prompt> " --height=40% --reverse
         return $?
     fi
-    local choice
+    local choice='' tty="${SHM_TTY_PATH:-/dev/tty}" tty_fd
+    if ! exec {tty_fd}<"$tty" 2>/dev/null; then
+        log_error "Cannot open a terminal for interactive selection."
+        return 1
+    fi
     PS3="$prompt: "
     select choice in "${options[@]}"; do
         if [[ -n "$choice" ]]; then
-            printf '%s\n' "$choice"
-            return 0
+            break
         fi
-    done
-    return 1
+    done <&"$tty_fd"
+    exec {tty_fd}<&-
+    [[ -n "$choice" ]] || return 1
+    printf '%s\n' "$choice"
 }
 
 # --- JSON helpers -----------------------------------------------------------

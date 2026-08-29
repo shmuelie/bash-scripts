@@ -17,18 +17,21 @@ Options:
   --remote <name>     Remote to check (default: origin).
   --user <name>       Filter to user/<name>/* branches (default: git user).
   --all               Include all branches, not just the user's.
+  --include-never-pushed
+                      Include local branches that have no configured upstream.
   --include-pr-status Query Azure DevOps PR status via `az` (slower).
   --json              Emit JSON.
 EOF
 }
 
-remote='origin'; user=''; all=0; include_pr=0
+remote='origin'; user=''; all=0; include_never_pushed=0; include_pr=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         --remote) remote="$2"; shift 2 ;;
         --user) user="$2"; shift 2 ;;
         --all) all=1; shift ;;
+        --include-never-pushed) include_never_pushed=1; shift ;;
         --include-pr-status) include_pr=1; shift ;;
         --json) JSON=1; shift ;;
         -*) die "Unknown option: $1" ;;
@@ -38,6 +41,7 @@ done
 
 require_cmd git
 [[ "$JSON" == "1" ]] && require_cmd jq
+git rev-parse --git-dir >/dev/null 2>&1 || die "Not a git repository (or git failed) in '$(pwd)'."
 
 # Determine user filter.
 if [[ "$all" == "0" && -z "$user" ]]; then
@@ -47,15 +51,15 @@ fi
 user_prefix=''
 [[ "$all" == "0" && -n "$user" ]] && user_prefix="user/$user/"
 
-# Collect candidate branches (no upstream, or upstream [gone]).
+# Collect branches whose configured upstream is gone. Local-only branches are
+# included only when explicitly requested.
 candidates=()
 while IFS='|' read -r branch upstream track; do
     [[ -z "$branch" ]] && continue
-    if [[ -n "$upstream" && "$track" != '[gone]' ]]; then continue; fi
+    if [[ "$track" != '[gone]' && ! ( -z "$upstream" && "$include_never_pushed" == "1" ) ]]; then continue; fi
     if [[ -n "$user_prefix" && "$branch" != "$user_prefix"* ]]; then continue; fi
     candidates+=("$branch")
-done < <(git --no-pager for-each-ref --format='%(refname:short)|%(upstream:short)|%(upstream:track)' refs/heads/ 2>/dev/null) \
-    || die "Not a git repository (or git failed) in '$(pwd)'."
+done < <(git --no-pager for-each-ref --format='%(refname:short)|%(upstream:short)|%(upstream:track)' refs/heads/)
 
 [[ ${#candidates[@]} -eq 0 ]] && { [[ "$JSON" == "1" ]] && echo '[]'; exit 0; }
 
@@ -63,10 +67,15 @@ done < <(git --no-pager for-each-ref --format='%(refname:short)|%(upstream:short
 declare -A remote_refs=()
 ls_filter='refs/heads/*'
 [[ -n "$user_prefix" ]] && ls_filter="refs/heads/$user_prefix*"
-while IFS= read -r ref_line; do
-    ref_branch="${ref_line#*$'\t'refs/heads/}"
-    [[ "$ref_branch" != "$ref_line" ]] && remote_refs["$ref_branch"]=1
-done < <(git --no-pager ls-remote --heads "$remote" "$ls_filter" 2>/dev/null)
+if git remote get-url "$remote" >/dev/null 2>&1; then
+    if ! remote_output="$(git --no-pager ls-remote --heads "$remote" "$ls_filter" 2>&1)"; then
+        die "Failed to list remote branches from '$remote': $remote_output"
+    fi
+    while IFS= read -r ref_line; do
+        ref_branch="${ref_line#*$'\t'refs/heads/}"
+        [[ "$ref_branch" != "$ref_line" ]] && remote_refs["$ref_branch"]=1
+    done <<< "$remote_output"
+fi
 
 # Build worktree path lookup.
 declare -A worktree_paths=()

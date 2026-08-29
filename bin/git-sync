@@ -51,8 +51,9 @@ if ! should_process "git fetch ($target)"; then
     exit 0
 fi
 
-# git writes fetch progress/ref updates to stderr; capture both streams.
-output="$(git "${fetch_args[@]}" 2>&1)" || die "git fetch failed."
+# Parsed fetch output must be locale-stable; do not mutate the caller's locale.
+# git writes fetch progress/ref updates to stderr, so capture both streams.
+output="$(LC_ALL=C LANG=C git "${fetch_args[@]}" 2>&1)" || die "git fetch failed."
 
 results=()  # each: ACTION<TAB>REF<TAB>SUMMARY
 

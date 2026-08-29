@@ -160,3 +160,34 @@ git_branch_user() {
     fi
     printf '%s\n' "$candidate"
 }
+
+# git_operation [PATH] — print the in-progress Git operation for a repository,
+# or nothing when no merge/rebase/cherry-pick/revert/bisect is active.
+git_operation() {
+    local repo="${1:-.}" git_dir step='' total='' type=''
+    git_dir="$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null)" || return 0
+
+    if [[ -d "$git_dir/rebase-merge" ]]; then
+        [[ -f "$git_dir/rebase-merge/msgnum" ]] && step="$(tr -d '[:space:]' < "$git_dir/rebase-merge/msgnum")"
+        [[ -f "$git_dir/rebase-merge/end" ]] && total="$(tr -d '[:space:]' < "$git_dir/rebase-merge/end")"
+        if [[ -f "$git_dir/rebase-merge/interactive" ]]; then type='REBASE-i'; else type='REBASE-m'; fi
+    elif [[ -d "$git_dir/rebase-apply" ]]; then
+        [[ -f "$git_dir/rebase-apply/next" ]] && step="$(tr -d '[:space:]' < "$git_dir/rebase-apply/next")"
+        [[ -f "$git_dir/rebase-apply/last" ]] && total="$(tr -d '[:space:]' < "$git_dir/rebase-apply/last")"
+        if [[ -f "$git_dir/rebase-apply/rebasing" ]]; then type='REBASE'
+        elif [[ -f "$git_dir/rebase-apply/applying" ]]; then type='AM'
+        else type='AM/REBASE'; fi
+    elif [[ -f "$git_dir/MERGE_HEAD" ]]; then type='MERGING'
+    elif [[ -f "$git_dir/REVERT_HEAD" ]]; then type='REVERTING'
+    elif [[ -f "$git_dir/CHERRY_PICK_HEAD" ]]; then type='CHERRY-PICKING'
+    elif [[ -f "$git_dir/BISECT_LOG" ]]; then type='BISECTING'
+    fi
+
+    if [[ -n "$type" ]]; then
+        if [[ -n "$step" && -n "$total" ]]; then
+            printf '%s %s/%s\n' "$type" "$step" "$total"
+        else
+            printf '%s\n' "$type"
+        fi
+    fi
+}
