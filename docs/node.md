@@ -45,6 +45,9 @@ npm-package list --global --outdated | ...   # (names) | npm-package update --gl
 node-alias set default 22.11.0
 ```
 
+`npm-package list` tolerates warning text before or after npm's JSON payload and
+fails clearly when no complete JSON object or array is present.
+
 ## Requirements
 
 - `nvm.sh` for the version-management commands.

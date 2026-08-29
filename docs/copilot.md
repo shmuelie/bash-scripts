@@ -23,6 +23,8 @@ Wraps `copilot` and adds:
   resumes automatically, multiple show a picker, and a lone named session
   auto-resumes. Control it with `--no-resume`, `--resume-latest`,
   `--resume-session <id>`, `--no-auto-resume`, and `--include-unnamed`.
+  An explicit `--session-id` or launcher `--dry-run` suppresses automatic
+  resume and the picker; `--resume-session` remains explicit and takes priority.
 - **Sensible defaults** (`--allow-all --experimental`), each disablable with
   `--no-allow-all` / `--no-experimental`.
 - **Default deny rules** for destructive git operations (force push, hard
@@ -76,12 +78,21 @@ missing tool completions, compacting, and merging) are implemented in
 `lib/copilot/session-maintenance.js` and run under Node, which is always present
 where the Copilot CLI runs.
 
+Workspace scalar fields are decoded from plain, single-line or multiline
+quoted, literal-block, and folded-block YAML. Rename and merge operations safely
+quote updated values while preserving unrelated workspace metadata.
+
 ```bash
 copilot-session list --json
 copilot-session-maintenance repair-events <id>
 copilot-session-maintenance compress <id> --keep 10
 copilot-session-maintenance merge <id1> <id2> --remove-source
 ```
+
+`--keep` must be a positive integer. Repair, compress, and merge drop malformed
+or truncated JSONL lines when a valid session remains and report the count.
+Commands that rewrite existing files create `.bak` copies unless
+`--no-backup` is supplied.
 
 ## Requirements
 

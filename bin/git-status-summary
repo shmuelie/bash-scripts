@@ -60,6 +60,7 @@ idxA=0; idxM=0; idxD=0; wrkA=0; wrkM=0; wrkD=0; untracked=0; conflicts=0
 while IFS= read -r line; do
     if [[ "$line" == '## '* ]]; then
         bl="${line:3}"
+        [[ "$bl" == 'No commits yet on '* ]] && bl="${bl#No commits yet on }"
         if [[ "$bl" =~ ^(.+)\.\.\.([^ ]+)(\ \[(.+)\])?$ ]]; then
             branch="${BASH_REMATCH[1]}"
             upstream="${BASH_REMATCH[2]}"
@@ -94,30 +95,7 @@ while IFS= read -r line; do
 done < <(git status --porcelain=v1 --branch 2>/dev/null)
 
 toplevel="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-git_dir="$(git rev-parse --git-dir 2>/dev/null || true)"
-
-operation=''
-if [[ -n "$git_dir" ]]; then
-    if [[ -d "$git_dir/rebase-merge" ]]; then
-        step=''; total=''
-        [[ -f "$git_dir/rebase-merge/msgnum" ]] && step="$(tr -d '[:space:]' < "$git_dir/rebase-merge/msgnum")"
-        [[ -f "$git_dir/rebase-merge/end" ]] && total="$(tr -d '[:space:]' < "$git_dir/rebase-merge/end")"
-        if [[ -f "$git_dir/rebase-merge/interactive" ]]; then type='REBASE-i'; else type='REBASE-m'; fi
-        if [[ -n "$step" && -n "$total" ]]; then operation="$type $step/$total"; else operation="$type"; fi
-    elif [[ -d "$git_dir/rebase-apply" ]]; then
-        step=''; total=''
-        [[ -f "$git_dir/rebase-apply/next" ]] && step="$(tr -d '[:space:]' < "$git_dir/rebase-apply/next")"
-        [[ -f "$git_dir/rebase-apply/last" ]] && total="$(tr -d '[:space:]' < "$git_dir/rebase-apply/last")"
-        if [[ -f "$git_dir/rebase-apply/rebasing" ]]; then type='REBASE'
-        elif [[ -f "$git_dir/rebase-apply/applying" ]]; then type='AM'
-        else type='AM/REBASE'; fi
-        if [[ -n "$step" && -n "$total" ]]; then operation="$type $step/$total"; else operation="$type"; fi
-    elif [[ -f "$git_dir/MERGE_HEAD" ]]; then operation='MERGING'
-    elif [[ -f "$git_dir/REVERT_HEAD" ]]; then operation='REVERTING'
-    elif [[ -f "$git_dir/CHERRY_PICK_HEAD" ]]; then operation='CHERRY-PICKING'
-    elif [[ -f "$git_dir/BISECT_LOG" ]]; then operation='BISECTING'
-    fi
-fi
+operation="$(git_operation .)"
 
 remote_url="$(git remote get-url origin 2>/dev/null || true)"
 if [[ -n "$remote_url" ]]; then

@@ -81,10 +81,28 @@ for org_dir in "$root"/*/; do
             if ! should_process "Move clone into '$branch' subdirectory"; then
                 emit "$repo_rel" 'git-at-repo-level' 'would-move' "$repo_dir" "$target" 'WhatIf'; continue
             fi
-            tmp="$org_dir$repo_name.__layout_tmp_$RANDOM"
-            if mv -- "$repo_dir" "$tmp" 2>/dev/null && mkdir -p "$(dirname -- "$target")" && mv -- "$tmp" "$target" 2>/dev/null; then
+            stage_dir="$(mktemp -d "${org_dir}.${repo_name}.__layout_tmp.XXXXXX")"
+            staged_repo="$stage_dir/$repo_name"
+            if mv -- "$repo_dir" "$staged_repo" 2>/dev/null &&
+                mkdir -p "$(dirname -- "$target")" &&
+                mv -- "$staged_repo" "$target" 2>/dev/null; then
+                rmdir "$stage_dir" 2>/dev/null || true
                 emit "$repo_rel" 'git-at-repo-level' 'moved' "$repo_dir" "$target" 'Converted'
             else
+                if [[ -e "$staged_repo" ]]; then
+                    rollback_parent="$(dirname -- "$target")"
+                    while [[ "$rollback_parent" == "$repo_dir" || "$rollback_parent" == "$repo_dir/"* ]]; do
+                        rmdir "$rollback_parent" 2>/dev/null || break
+                        [[ "$rollback_parent" == "$repo_dir" ]] && break
+                        rollback_parent="$(dirname -- "$rollback_parent")"
+                    done
+                    if [[ ! -e "$repo_dir" ]]; then
+                        mv -- "$staged_repo" "$repo_dir" 2>/dev/null || true
+                    else
+                        log_error "Could not roll back staged repository to $repo_dir; it remains at $staged_repo."
+                    fi
+                fi
+                rmdir "$stage_dir" 2>/dev/null || true
                 emit "$repo_rel" 'git-at-repo-level' 'move-failed' "$repo_dir" "$target" 'Error'
             fi
             continue

@@ -19,6 +19,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+[[ "${DRY_RUN:-0}" == "1" ]] && args+=(--defer-resume)
 build_launch_plan "${args[@]+"${args[@]}"}" || exit $?
 
 # --passthru: print the resolved plan (like Start-Copilot -PassThru) and stop.

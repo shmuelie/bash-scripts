@@ -182,11 +182,15 @@ build_launch_plan() {
 
     local prompt='' name=''
     local no_resume=0 resume_latest=0 resume_session='' show_picker=0 include_unnamed=0 defer_resume=0
+    local session_id_present=0
     local no_allow_all=0 no_experimental=0 no_deny=0
     local enable_mcp=() disable_mcp=() fwd=() passthrough_args=() saw_ddash=0
 
     while [[ $# -gt 0 ]]; do
-        if [[ "$saw_ddash" == "1" ]]; then passthrough_args+=("$1"); shift; continue; fi
+        if [[ "$saw_ddash" == "1" ]]; then
+            [[ "$1" == '--session-id' || "$1" == --session-id=* ]] && session_id_present=1
+            passthrough_args+=("$1"); shift; continue
+        fi
         case "$1" in
             --) saw_ddash=1; shift ;;
             --no-resume) no_resume=1; shift ;;
@@ -201,7 +205,13 @@ build_launch_plan() {
             --enable-mcp-server) enable_mcp+=("$2"); shift 2 ;;
             --disable-mcp-server) disable_mcp+=("$2"); shift 2 ;;
             --name) name="$2"; shift 2 ;;
-            --model|--reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format|--session-id|-C|--change-dir)
+            --session-id)
+                session_id_present=1
+                fwd+=("$1" "$2"); shift 2 ;;
+            --session-id=*)
+                session_id_present=1
+                fwd+=("$1"); shift ;;
+            --model|--reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format|-C|--change-dir)
                 fwd+=("$1" "$2"); shift 2 ;;
             --plan) fwd+=("$1"); shift ;;
             -h|--help) _launch_plan_usage; return 2 ;;
@@ -243,7 +253,7 @@ build_launch_plan() {
     if [[ -n "$resume_session" ]]; then
         log_verbose "Resuming session: $resume_session"
         COPILOT_ARGS+=(--resume "$resume_session"); resumed=1
-    elif [[ "$no_resume" == "0" && "$defer_resume" == "0" ]]; then
+    elif [[ "$no_resume" == "0" && "$defer_resume" == "0" && "$session_id_present" == "0" ]]; then
         local chosen
         chosen="$(_shm_resolve_resume "$resume_latest" "$show_picker" "$include_unnamed")"
         if [[ -n "$chosen" ]]; then

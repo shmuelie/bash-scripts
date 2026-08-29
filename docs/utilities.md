@@ -29,6 +29,9 @@ from `lib/utils/shell-integration.sh`.
   sequence (`Reset-TerminalModes`); no-ops when stdout is redirected.
 - `dotnet-tool`, `pip-package`, `uv-package`, `vscode-ext` — tool management
   wrappers with `--json` output and `--dry-run` previews.
+- `pip-package` and `uv-package` extract a complete JSON payload even when the
+  underlying tool prints warning lines around it, and fail clearly if none is
+  present.
 
 ## Shell integration
 

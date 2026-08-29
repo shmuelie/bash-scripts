@@ -10,6 +10,8 @@ if [[ -n "${_SHM_COPILOT_COMMON_SOURCED:-}" ]]; then
 fi
 _SHM_COPILOT_COMMON_SOURCED=1
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspace-yaml.sh"
+
 # Field separator for internal structured rows. A non-whitespace character (US,
 # 0x1f) is used instead of TAB so `IFS=... read` preserves empty middle fields
 # (with a whitespace IFS like TAB, runs of the delimiter collapse and shift
@@ -33,43 +35,25 @@ resolve_copilot() {
     printf '%s\n' "$exe"
 }
 
-# copilot_ws_field FILE KEY — print the value of a simple `key: value` line.
+# copilot_ws_field FILE KEY — print a decoded top-level YAML scalar.
 copilot_ws_field() {
     local file="$1" key="$2"
-    sed -n "s/^${key}:[[:space:]]*\(.*\)$/\1/p" "$file" | head -n1 |
-        sed -e 's/[[:space:]]*$//'
+    workspace_yaml_get "$file" "$key"
 }
 
-# copilot_ws_name FILE — print the session name, handling YAML block scalars
-# (`name: |-` / `>-` followed by an indented line) and plain `name: value`.
-# Ported from the name-parsing logic in Sessions.ps1 / Get-CopilotLaunchPlan.ps1.
+# copilot_ws_name FILE — print the decoded session name.
 copilot_ws_name() {
-    local file="$1"
-    awk '
-        /^name:[[:space:]]*[|>]-?[[:space:]]*$/ { block=1; next }
-        block==1 {
-            line=$0
-            sub(/^[[:space:]]+/, "", line)
-            sub(/[[:space:]]+$/, "", line)
-            print line
-            exit
-        }
-        /^name:[[:space:]]+/ {
-            line=$0
-            sub(/^name:[[:space:]]+/, "", line)
-            sub(/[[:space:]]+$/, "", line)
-            print line
-            exit
-        }
-    ' "$file"
+    workspace_yaml_get "$1" name
 }
 
 # copilot_display_name FILE — name, else summary, else "(no summary)".
 copilot_display_name() {
     local file="$1" name summary
     name="$(copilot_ws_name "$file")"
+    name="${name//$'\n'/ }"
     if [[ -n "$name" ]]; then printf '%s\n' "$name"; return; fi
     summary="$(copilot_ws_field "$file" summary)"
+    summary="${summary//$'\n'/ }"
     if [[ -n "$summary" ]]; then printf '%s\n' "$summary"; return; fi
     printf '%s\n' '(no summary)'
 }

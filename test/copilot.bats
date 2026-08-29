@@ -112,6 +112,56 @@ make_session() {
     [ "$output" = "null" ]
 }
 
+@test "launch-plan explicit --session-id suppresses automatic resume and picker" {
+    make_session one "One" 2026-05-01T00:00:00Z main
+    make_session two "Two" 2026-05-02T00:00:00Z main
+    cat > "$STUB/fzf" <<'EOF'
+#!/usr/bin/env bash
+echo called >> "$FZF_LOG"
+exit 1
+EOF
+    chmod +x "$STUB/fzf"
+    export FZF_LOG="$WORK/fzf.log"
+
+    run bash -c "cd '$SESSION_CWD' && copilot-launch-plan --session-id explicit-id --json |
+        jq -c '{sessionId:(.args[.args|index(\"--session-id\")+1]),resume:(.args|index(\"--resume\"))}'"
+    [ "$status" -eq 0 ]
+    [ "$output" = '{"sessionId":"explicit-id","resume":null}' ]
+    [ ! -e "$FZF_LOG" ]
+}
+
+@test "launch-plan explicit resume is honored alongside --session-id" {
+    make_session one "One" 2026-05-01T00:00:00Z main
+    run bash -c "cd '$SESSION_CWD' && copilot-launch-plan --session-id explicit-id --resume-session one --json |
+        jq -r '.args[.args|index(\"--resume\")+1]'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "one" ]
+}
+
+@test "start-copilot --dry-run does not open automatic resume picker" {
+    make_session one "One" 2026-05-01T00:00:00Z main
+    make_session two "Two" 2026-05-02T00:00:00Z main
+    cat > "$STUB/fzf" <<'EOF'
+#!/usr/bin/env bash
+echo called >> "$FZF_LOG"
+exit 1
+EOF
+    chmod +x "$STUB/fzf"
+    export FZF_LOG="$WORK/fzf.log"
+
+    run bash -c "cd '$SESSION_CWD' && start-copilot --dry-run --passthru"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"--resume"* ]]
+    [ ! -e "$FZF_LOG" ]
+}
+
+@test "start-copilot --dry-run still honors explicit resume" {
+    make_session one "One" 2026-05-01T00:00:00Z main
+    run bash -c "cd '$SESSION_CWD' && start-copilot --dry-run --passthru --resume-session one"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--resume one"* ]]
+}
+
 @test "launch-plan MCP autoConnect disables non-matching path-glob servers" {
     cat > "$COPILOT_HOME/mcp-config.json" <<EOF
 {"mcpServers":{"always":{"autoConnect":true},"here":{"autoConnect":["$SESSION_CWD/*"]},"elsewhere":{"autoConnect":["/nope/*"]}}}
@@ -165,13 +215,62 @@ EOF
     [ "$output" = "feature/x" ]
 }
 
+@test "copilot-session list decodes quoted and block workspace scalars" {
+    local d="$COPILOT_HOME/session-state/yaml"
+    mkdir -p "$d"
+    cat > "$d/workspace.yaml" <<EOF
+id: yaml
+cwd: '$SESSION_CWD'
+updated_at: "2026-05-01T00:00:00Z"
+branch: "feature/quote\\\\path:#hash"
+repository: 'org/repo: # literal'
+name: >-
+  Name: # "quote"
+  and backslash \\ path
+unrelated: |
+  keep: # this
+  exactly
+EOF
+    printf '{"type":"session.start"}\n' > "$d/events.jsonl"
+    run bash -c "cd '$SESSION_CWD' && copilot-session list --json |
+        jq -c '.[0] | {name,branch,repository}'"
+    [ "$status" -eq 0 ]
+    [ "$output" = '{"name":"Name: # \"quote\" and backslash \\ path","branch":"feature/quote\\path:#hash","repository":"org/repo: # literal"}' ]
+}
+
+@test "copilot-session reads and replaces multiline quoted workspace scalars" {
+    local d="$COPILOT_HOME/session-state/multiline"
+    mkdir -p "$d"
+    cat > "$d/workspace.yaml" <<EOF
+id: multiline
+cwd: "$SESSION_CWD"
+updated_at: 2026-05-01T00:00:00Z
+summary: "A long summary
+
+  continued here"
+unrelated: keep
+EOF
+    printf '{"type":"session.start"}\n' > "$d/events.jsonl"
+
+    run bash -c "cd '$SESSION_CWD' && copilot-session list --json | jq -r '.[0].name'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "A long summary continued here" ]
+
+    run copilot-session rename multiline "New Summary"
+    [ "$status" -eq 0 ]
+    grep -q '^summary: "New Summary"$' "$d/workspace.yaml"
+    grep -q '^unrelated: keep$' "$d/workspace.yaml"
+    ! grep -q 'continued here' "$d/workspace.yaml"
+}
+
 @test "copilot-session rename updates name and summary" {
     make_session ren "Old Name" 2026-05-01T00:00:00Z main
     echo "summary: Old Name" >> "$COPILOT_HOME/session-state/ren/workspace.yaml"
     run copilot-session rename ren "New Name"
     [ "$status" -eq 0 ]
-    grep -q '^name: New Name$' "$COPILOT_HOME/session-state/ren/workspace.yaml"
-    grep -q '^summary: New Name$' "$COPILOT_HOME/session-state/ren/workspace.yaml"
+    run bash -c "copilot-session list --all --id ren --json | jq -r '.[0].name'"
+    [ "$output" = "New Name" ]
+    grep -q '^summary: "New Name"$' "$COPILOT_HOME/session-state/ren/workspace.yaml"
 }
 
 @test "copilot-session rename collapses a block-scalar name" {
@@ -181,9 +280,30 @@ EOF
     printf '{"type":"session.start"}\n' > "$d/events.jsonl"
     run copilot-session rename blk "Flat"
     [ "$status" -eq 0 ]
-    grep -q '^name: Flat$' "$d/workspace.yaml"
+    grep -q '^name: "Flat"$' "$d/workspace.yaml"
     grep -q '^user_named: false$' "$d/workspace.yaml"
     ! grep -q 'Line one' "$d/workspace.yaml"
+}
+
+@test "copilot-session rename safely round-trips special characters" {
+    local d="$COPILOT_HOME/session-state/special"
+    mkdir -p "$d"
+    cat > "$d/workspace.yaml" <<EOF
+id: special
+cwd: "$SESSION_CWD"
+updated_at: 2026-05-01T00:00:00Z
+name: Old
+summary: Old
+unrelated: |
+  keep: # "quoted" \\ value
+EOF
+    printf '{"type":"session.start"}\n' > "$d/events.jsonl"
+    local new_name='A: # "quote" \ path and it'\''s safe'
+    run copilot-session rename special "$new_name"
+    [ "$status" -eq 0 ]
+    run bash -c "copilot-session list --all --id special --json | jq -r '.[0].name'"
+    [ "$output" = "$new_name" ]
+    grep -Fq '  keep: # "quoted" \ value' "$d/workspace.yaml"
 }
 
 @test "copilot-session remove --dry-run keeps the session" {
@@ -272,6 +392,77 @@ EOF
     [ "$output" = "u3,u4," ]
 }
 
+@test "compress rejects invalid keep values without changing the session" {
+    local d="$COPILOT_HOME/session-state/badkeep"
+    mkdir -p "$d"
+    printf 'id: badkeep\ncwd: %s\nupdated_at: 2026-01-02T00:00:00Z\nname: Bad\n' "$SESSION_CWD" > "$d/workspace.yaml"
+    printf '{"type":"session.start","id":"s","data":{}}\n{"type":"user.message","id":"u","data":{}}\n' > "$d/events.jsonl"
+    cp "$d/events.jsonl" "$d/original"
+    local value
+    for value in invalid -1 0; do
+        run copilot-session-maintenance compress badkeep --keep "$value" --no-backup
+        [ "$status" -ne 0 ]
+        cmp -s "$d/original" "$d/events.jsonl"
+        [ ! -e "$d/events.jsonl.bak" ]
+    done
+}
+
+@test "Node compress defensively rejects invalid keep before writing" {
+    local d="$COPILOT_HOME/session-state/nodekeep"
+    mkdir -p "$d"
+    printf '{"type":"session.start","id":"s","data":{}}\n' > "$d/events.jsonl"
+    cp "$d/events.jsonl" "$d/original"
+    run node "$REPO_ROOT/lib/copilot/session-maintenance.js" compress "$d" --keep nope --no-backup
+    [ "$status" -ne 0 ]
+    cmp -s "$d/original" "$d/events.jsonl"
+}
+
+@test "repair drops a malformed final line and backs up before writing" {
+    local d="$COPILOT_HOME/session-state/malformed"
+    mkdir -p "$d"
+    printf 'id: malformed\ncwd: %s\nupdated_at: 2026-01-02T00:00:00Z\nname: Bad tail\n' "$SESSION_CWD" > "$d/workspace.yaml"
+    printf '{"type":"session.start","id":"s","data":{}}\n{"type":"user.message","id":"u","data":{}}\n{"type":"assistant.message"' > "$d/events.jsonl"
+    cp "$d/events.jsonl" "$d/original"
+    run copilot-session-maintenance repair-events malformed
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Dropped 1 malformed JSONL line."* ]]
+    cmp -s "$d/original" "$d/events.jsonl.bak"
+    run bash -c "jq -s 'length' '$d/events.jsonl'"
+    [ "$output" = "2" ]
+}
+
+@test "compress repairs malformed input before compacting" {
+    local d="$COPILOT_HOME/session-state/cmpbad"
+    mkdir -p "$d"
+    printf 'id: cmpbad\ncwd: %s\nupdated_at: 2026-01-02T00:00:00Z\nname: Cmp\n' "$SESSION_CWD" > "$d/workspace.yaml"
+    {
+        echo '{"type":"session.start","id":"s","data":{}}'
+        for i in 1 2 3; do
+            echo "{\"type\":\"user.message\",\"id\":\"u$i\",\"data\":{}}"
+            echo "{\"type\":\"assistant.turn_end\",\"id\":\"a$i\",\"data\":{}}"
+        done
+        printf '{"type":"assistant.message"'
+    } > "$d/events.jsonl"
+    run copilot-session-maintenance compress cmpbad --keep 2
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Dropped 1 malformed JSONL line."* ]]
+    grep -q '{"type":"assistant.message"$' "$d/events.jsonl.bak"
+    run bash -c "jq -r 'select(.type==\"user.message\").id' '$d/events.jsonl' | tr '\n' ','"
+    [ "$output" = "u2,u3," ]
+}
+
+@test "compress refuses an entirely invalid stream without writing" {
+    local d="$COPILOT_HOME/session-state/allbad"
+    mkdir -p "$d"
+    printf 'id: allbad\ncwd: %s\nupdated_at: 2026-01-02T00:00:00Z\nname: Bad\n' "$SESSION_CWD" > "$d/workspace.yaml"
+    printf '{"broken"\n' > "$d/events.jsonl"
+    cp "$d/events.jsonl" "$d/original"
+    run copilot-session-maintenance compress allbad --keep 1 --no-backup
+    [ "$status" -ne 0 ]
+    [[ "$output" != *"$REPO_ROOT/lib/copilot/session-maintenance.js:"* ]]
+    cmp -s "$d/original" "$d/events.jsonl"
+}
+
 @test "merge combines sessions into one with a single session.start" {
     local a="$COPILOT_HOME/session-state/m1"
     local b="$COPILOT_HOME/session-state/m2"
@@ -282,13 +473,69 @@ EOF
         printf 'id: %s\ncwd: %s\nupdated_at: %sT00:00:00Z\nname: %s\n' "$id" "$SESSION_CWD" "$day" "$nm" > "$d/workspace.yaml"
         printf '{"type":"session.start","id":"s_%s","timestamp":"%sT00:00:00Z","data":{"sessionId":"%s"}}\n{"type":"user.message","id":"u_%s","timestamp":"%sT00:00:01Z","data":{}}\n{"type":"assistant.turn_end","id":"t_%s","timestamp":"%sT00:00:02Z","data":{}}\n' "$id" "$day" "$id" "$id" "$day" "$id" "$day" > "$d/events.jsonl"
     done
+    printf '{"type":"truncated"' >> "$b/events.jsonl"
     run copilot-session-maintenance merge m1 m2
     [ "$status" -eq 0 ]
+    [[ "$output" == *"Dropped 1 malformed JSONL line."* ]]
     new_id="${lines[-1]}"
     [ -d "$COPILOT_HOME/session-state/$new_id" ]
     run bash -c "jq -r 'select(.type==\"session.start\")' '$COPILOT_HOME/session-state/$new_id/events.jsonl' | jq -s 'length'"
     [ "$output" = "1" ]
-    grep -q '^name: First + Second$' "$COPILOT_HOME/session-state/$new_id/workspace.yaml"
+    run bash -c "copilot-session list --all --id '$new_id' --json | jq -r '.[0].name'"
+    [ "$output" = "First + Second" ]
+    grep -q "^id: $new_id$" "$COPILOT_HOME/session-state/$new_id/workspace.yaml"
+    grep -q '^updated_at: [^"]' "$COPILOT_HOME/session-state/$new_id/workspace.yaml"
     # Sources preserved without --remove-source.
     [ -d "$COPILOT_HOME/session-state/m1" ]
+}
+
+@test "merge safely encodes special YAML names and preserves unrelated fields" {
+    local id d
+    for id in ya yb; do
+        d="$COPILOT_HOME/session-state/$id"
+        mkdir -p "$d"
+        if [[ "$id" == ya ]]; then
+            cat > "$d/workspace.yaml" <<EOF
+id: ya
+cwd: "$SESSION_CWD"
+updated_at: 2026-01-01T00:00:00Z
+name: 'First: # value'
+unrelated: |
+  keep: "this" \\ field
+EOF
+        else
+            cat > "$d/workspace.yaml" <<EOF
+id: yb
+cwd: "$SESSION_CWD"
+updated_at: 2026-02-01T00:00:00Z
+name: >-
+  Second "quoted"
+  \\ path
+unrelated: |
+  keep: "this" \\ field
+EOF
+        fi
+        printf '{"type":"session.start","id":"s_%s","timestamp":"2026-01-01T00:00:00Z","data":{"sessionId":"%s"}}\n' "$id" "$id" > "$d/events.jsonl"
+    done
+    run copilot-session-maintenance merge ya yb
+    [ "$status" -eq 0 ]
+    local new_id="${lines[-1]}"
+    run bash -c "copilot-session list --all --id '$new_id' --json | jq -r '.[0].name'"
+    [ "$output" = 'First: # value + Second "quoted" \ path' ]
+    grep -Fq '  keep: "this" \ field' "$COPILOT_HOME/session-state/$new_id/workspace.yaml"
+}
+
+@test "merge with an invalid source does not remove source sessions" {
+    local id d
+    for id in good bad; do
+        d="$COPILOT_HOME/session-state/$id"
+        mkdir -p "$d"
+        printf 'id: %s\ncwd: %s\nupdated_at: 2026-01-01T00:00:00Z\nname: %s\n' "$id" "$SESSION_CWD" "$id" > "$d/workspace.yaml"
+    done
+    printf '{"type":"session.start","id":"s","data":{"sessionId":"good"}}\n' > "$COPILOT_HOME/session-state/good/events.jsonl"
+    printf '{"broken"\n' > "$COPILOT_HOME/session-state/bad/events.jsonl"
+    run copilot-session-maintenance merge good bad --remove-source
+    [ "$status" -ne 0 ]
+    [ -d "$COPILOT_HOME/session-state/good" ]
+    [ -d "$COPILOT_HOME/session-state/bad" ]
 }

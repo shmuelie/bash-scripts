@@ -97,6 +97,23 @@ clone_repo() {
     [ "$output" = "false" ]
 }
 
+@test "git-status-summary reports an unborn branch name" {
+    git init -q -b topic "$WORK/empty"
+    run bash -c "cd '$WORK/empty' && git-status-summary --json | jq -r '.branch, .statusString'"
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "topic" ]
+    [ "${lines[1]}" = "[topic]" ]
+}
+
+@test "git-status-summary reports an unborn cloned branch with upstream" {
+    git init -q --bare --initial-branch=main "$WORK/empty.git"
+    git clone -q "$WORK/empty.git" "$WORK/empty-clone"
+    run bash -c "cd '$WORK/empty-clone' && git-status-summary --json | jq -r '.branch, .upstream'"
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = "main" ]
+    [ "${lines[1]}" = "origin/main" ]
+}
+
 @test "worktree lifecycle: new, list, switch, remove" {
     clone_repo
     np="$(git-worktree-new feature-x --kind feature)"
@@ -151,6 +168,22 @@ clone_repo() {
     [[ "$output" == *"Updated"* ]]
 }
 
+@test "git-sync forces a stable C locale for parsed fetch output" {
+    mkdir -p "$WORK/stub"
+    cat > "$WORK/stub/git" <<'EOF'
+#!/usr/bin/env bash
+printf '%s/%s\n' "${LC_ALL:-}" "${LANG:-}" > "$LOCALE_LOG"
+printf '   abc1234..def5678  main       -> origin/main\n' >&2
+EOF
+    chmod +x "$WORK/stub/git"
+    export LOCALE_LOG="$WORK/locale.log"
+
+    run env PATH="$WORK/stub:$PATH" LANG=fr_FR.UTF-8 LC_ALL= bash -c 'git-sync --json | jq -r ".[0].action"'
+    [ "$status" -eq 0 ]
+    [ "$output" = "Updated" ]
+    [ "$(cat "$LOCALE_LOG")" = "C/C" ]
+}
+
 @test "git-worktree-update fast-forwards a behind worktree" {
     clone_repo
     git -C "$WORK/seed" commit -q --allow-empty -m more
@@ -158,6 +191,67 @@ clone_repo() {
     run bash -c 'git-worktree-update --json | jq -r ".[] | select(.branch==\"main\") | .status"'
     [ "$status" -eq 0 ]
     [ "$output" = "Updated" ]
+}
+
+@test "git-worktree-update skips a behind worktree during a merge" {
+    clone_repo
+    git -C "$WORK/seed" commit -q --allow-empty -m more
+    git -C "$WORK/seed" push -q "$WORK/upstream.git" main
+    touch "$(git rev-parse --git-dir)/MERGE_HEAD"
+
+    run bash -c 'git-worktree-update --json | jq -r ".[] | select(.branch==\"main\") | [.status,.operation] | @tsv"'
+    [ "$status" -eq 0 ]
+    [ "$output" = $'InProgress\tMERGING' ]
+}
+
+@test "git-worktree-update reports interactive rebase progress" {
+    clone_repo
+    git -C "$WORK/seed" commit -q --allow-empty -m more
+    git -C "$WORK/seed" push -q "$WORK/upstream.git" main
+    git_dir="$(git rev-parse --git-dir)"
+    mkdir -p "$git_dir/rebase-merge"
+    printf '1\n' > "$git_dir/rebase-merge/msgnum"
+    printf '3\n' > "$git_dir/rebase-merge/end"
+    : > "$git_dir/rebase-merge/interactive"
+
+    run bash -c 'git-worktree-update --json | jq -r ".[] | select(.branch==\"main\") | [.status,.operation] | @tsv"'
+    [ "$status" -eq 0 ]
+    [ "$output" = $'InProgress\tREBASE-i 1/3' ]
+}
+
+@test "git-worktree-update reports a missing behind worktree" {
+    clone_repo
+    missing="$SOURCE_REPOS/myorg/myrepo/missing"
+    git worktree add -q -b missing "$missing" origin/main
+    git -C "$WORK/seed" commit -q --allow-empty -m more
+    git -C "$WORK/seed" push -q "$WORK/upstream.git" main
+    rm -rf "$missing"
+
+    run bash -c 'git-worktree-update --json | jq -r ".[] | select(.branch==\"missing\") | .status"'
+    [ "$status" -eq 0 ]
+    [ "$output" = "Missing" ]
+}
+
+@test "git-worktree-update leaves NoUpstream unchanged when ls-remote fails" {
+    clone_repo
+    git-worktree-new local-only --kind feature >/dev/null
+    real_git="$(command -v git)"
+    mkdir -p "$WORK/stub"
+    cat > "$WORK/stub/git" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"ls-remote --heads origin"* ]]; then
+    echo "remote unavailable" >&2
+    exit 128
+fi
+exec "$REAL_GIT" "$@"
+EOF
+    chmod +x "$WORK/stub/git"
+    export REAL_GIT="$real_git"
+
+    run bash -c "PATH='$WORK/stub:$PATH' git-worktree-update --check-remote --json 2>'$WORK/warn' | jq -r '.[] | select(.branch==\"feature/local-only\") | .status'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "NoUpstream" ]
+    grep -q "Skipping remote branch check" "$WORK/warn"
 }
 
 @test "git-stale-branch finds a branch whose remote was deleted" {
@@ -186,6 +280,36 @@ clone_repo() {
     [[ "$output" == *"user/tester/gone"* ]]
 }
 
+@test "git-stale-branch excludes never-pushed branches by default" {
+    clone_repo
+    git checkout -q -b user/tester/local-only
+
+    run git-stale-branch --all
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"user/tester/local-only"* ]]
+
+    run git-stale-branch --all --include-never-pushed
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"user/tester/local-only"* ]]
+}
+
+@test "git-stale-branch errors outside a repository" {
+    run bash -c "cd '$WORK' && git-stale-branch --all"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Not a git repository"* ]]
+}
+
+@test "git-stale-branch does not classify branches when ls-remote fails" {
+    clone_repo
+    git checkout -q -b user/tester/local-only
+    git remote set-url origin "$WORK/missing-remote.git"
+
+    run git-stale-branch --all --include-never-pushed
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Failed to list remote branches"* ]]
+    [[ "$output" != *$'\nuser/tester/local-only'* ]]
+}
+
 @test "git-repo-repair moves a repo-level clone into a branch subdir" {
     mkdir -p "$SOURCE_REPOS/badorg"
     git clone -q "$WORK/seed" "$SOURCE_REPOS/badorg/badrepo"
@@ -193,4 +317,28 @@ clone_repo() {
     [ "$status" -eq 0 ]
     [ "$output" = "Converted" ]
     [ -d "$SOURCE_REPOS/badorg/badrepo/main/.git" ]
+    [ "$(find "$SOURCE_REPOS/badorg" -maxdepth 1 -name '.*.__layout_tmp.*' | wc -l)" -eq 0 ]
+}
+
+@test "pick_one select fallback reads the choice from a terminal input" {
+    printf '2\n' > "$WORK/choice"
+    run bash -c "
+        source '$REPO_ROOT/lib/common.sh'
+        have_cmd() { return 1; }
+        SHM_TTY_PATH='$WORK/choice'
+        printf 'alpha\nbeta\ngamma\n' | pick_one Pick
+    "
+    [ "$status" -eq 0 ]
+    [[ "${lines[-1]}" == *"beta" ]]
+}
+
+@test "pick_one reports a clear error without a controlling terminal" {
+    command -v setsid >/dev/null || skip "setsid is required"
+    run setsid bash -c "
+        source '$REPO_ROOT/lib/common.sh'
+        have_cmd() { return 1; }
+        printf 'alpha\nbeta\n' | pick_one Pick
+    "
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Cannot open a terminal for interactive selection."* ]]
 }
