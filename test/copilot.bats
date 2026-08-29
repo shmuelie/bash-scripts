@@ -176,8 +176,12 @@ EOF
     cat > "$COPILOT_HOME/mcp-config.json" <<EOF
 {"mcpServers":{"elsewhere":{"autoConnect":["/nope/*"]}}}
 EOF
-    run bash -c "cd '$SESSION_CWD' && copilot-launch-plan --no-resume --enable-mcp-server elsewhere --json | jq -r '[.args[] | select(.==\"elsewhere\")] | length'"
-    [ "$output" = "0" ]
+    run bash -c "cd '$SESSION_CWD' && copilot-launch-plan --no-resume --enable-mcp-server elsewhere --json | jq -r '
+        .args as \$a |
+        [range(0;\$a|length) as \$i | select(\$a[\$i]==\"--enable-mcp-server\") | \$a[\$i+1]] as \$enabled |
+        [range(0;\$a|length) as \$i | select(\$a[\$i]==\"--disable-mcp-server\") | \$a[\$i+1]] as \$disabled |
+        [(\$enabled|index(\"elsewhere\")!=null),(\$disabled|index(\"elsewhere\")==null)] | @tsv'"
+    [ "$output" = $'true\ttrue' ]
 }
 
 # ---- session CRUD --------------------------------------------------------

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# git-worktree-move — move a linked worktree to a new path.
+# Ported from Move-Worktree. Prints the destination on success.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { echo 'Usage: git-worktree-move [-C <repository>] [--path] [--force] <branch-or-path> <destination>'; }
+repo_arg=''; value=''; destination=''; mode='auto'; force=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -C|--repository-path) repo_arg="$2"; shift 2 ;;
+        --path) mode='path'; shift ;;
+        --force) force=1; shift ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        -v|--verbose) VERBOSE=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *) if [[ -z "$value" ]]; then value="$1"; elif [[ -z "$destination" ]]; then destination="$1"; else die "Unexpected argument: $1"; fi; shift ;;
+    esac
+done
+[[ -n "$value" && -n "$destination" ]] || { usage >&2; exit 2; }
+require_cmd git
+repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
+row="$(git_resolve_worktree_target "$repo" "$mode" "$value")" || exit 1
+old_path="${row%%"$SHM_FS"*}"
+root_row="$(git_root_worktree "$repo")" || die 'Could not identify the main/root worktree.'
+root_path="${root_row%%"$SHM_FS"*}"
+git_worktree_paths_equal "$old_path" "$root_path" &&
+    die "The main/root worktree at '$old_path' cannot be moved."
+new_path="$(git_absolute_from_base "$(pwd -P)" "$destination")"
+[[ ! -e "$new_path" && ! -L "$new_path" ]] || die "Destination path '$new_path' already exists."
+should_process "Move worktree at $old_path to $new_path" || exit 0
+args=(-C "$repo" worktree move)
+[[ "$force" == "1" ]] && args+=(--force)
+args+=(-- "$old_path" "$new_path")
+git "${args[@]}"
+printf '%s\n' "$new_path"

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # git-worktree-new — create a new branch checked out to a worktree.
-# Ported from New-Worktree. Prints the new worktree path on success so callers
-# can `cd "$(git-worktree-new ...)"`.
+# Ported from New-Worktree. Prints the created path on success.
 set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
@@ -10,53 +9,57 @@ source "$_SHM_ROOT/lib/git/git-common.sh"
 usage() { cat <<'EOF'
 Usage: git-worktree-new [options] <work-name>
 
-Create a new branch with a conventional prefix and check it out to a worktree.
-The branch path prints to stdout on success (use with cd).
-
 Options:
-  -k, --kind <user|feature|release>  Branch kind prefix (default: user).
+  --path, -C <repository-or-child>   Repository to use.
+  --worktree-path <destination>      Explicit destination.
+  -k, --kind <user|feature|release>  Branch kind (default: user).
   -u, --user <name>                  User segment for user branches.
-  --no-prefix                        Use <work-name> verbatim as the branch.
+  --no-prefix                        Use <work-name> verbatim.
   --dry-run, --whatif                Preview without creating.
   -v, --verbose                      Verbose output.
 EOF
 }
 
-kind='user'; user=''; no_prefix=0; work_name=''
+kind='user'; user=''; no_prefix=0; work_name=''; repo_arg=''; destination=''
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
+        --path|-C) repo_arg="$2"; shift 2 ;;
+        --worktree-path) destination="$2"; shift 2 ;;
         -k|--kind) kind="$2"; shift 2 ;;
         -u|--user) user="$2"; shift 2 ;;
         --no-prefix) no_prefix=1; shift ;;
         --dry-run|--whatif) DRY_RUN=1; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
         -*) die "Unknown option: $1" ;;
-        *) work_name="$1"; shift ;;
+        *) [[ -z "$work_name" ]] || die "Unexpected argument: $1"; work_name="$1"; shift ;;
     esac
 done
 
 [[ -n "$work_name" ]] || { usage >&2; die 'work-name is required.'; }
 require_cmd git
+repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
 
 if [[ "$no_prefix" == "1" ]]; then
     branch="$work_name"
 else
     case "$kind" in
-        user)
-            bu="${user:-$(git_branch_user)}"
-            branch="user/$bu/$work_name" ;;
+        user) branch="user/${user:-$(git_branch_user "$repo")}/$work_name" ;;
         feature) branch="feature/$work_name" ;;
         release) branch="release/$work_name" ;;
         *) die "Invalid kind: $kind (expected user, feature, or release)" ;;
     esac
 fi
 
-worktree_path="$(git_worktree_path "$branch")" || die 'Not in a git repository.'
-
-if ! should_process "Create worktree for new branch '$branch' at $worktree_path"; then
-    exit 0
+if [[ -n "$destination" ]]; then
+    worktree_path="$(git_absolute_from_base "$repo" "$destination")"
+else
+    worktree_path="$(git_worktree_path "$repo" "$branch")"
 fi
-
-git worktree add -b "$branch" "$worktree_path" >&2
+should_process "Create worktree for new branch '$branch' at $worktree_path" || exit 0
+if ! output="$(git -C "$repo" worktree add -b "$branch" "$worktree_path" 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    die "git worktree add failed for new branch '$branch' at '$worktree_path'."
+fi
+[[ -n "$output" ]] && printf '%s\n' "$output" >&2
 printf '%s\n' "$worktree_path"

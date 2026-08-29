@@ -28,10 +28,7 @@ EOF
 }
 
 session_path() {
-    local id="$1" row
-    row="$(copilot_sessions --id "$id" | head -n1)" || true
-    [[ -n "$row" ]] || return 1
-    printf '%s' "$row" | cut -d"$SHM_FS" -f10
+    copilot_resolve_session_dir "$1"
 }
 
 cmd="${1:-}"; shift || true
@@ -53,8 +50,10 @@ case "$cmd" in
             esac
         done
         [[ -n "$id" ]] || die 'repair-events requires a session id.'
-        dir="$(session_path "$id")" || die "Session '$id' not found."
+        session_path "$id" >/dev/null || exit 1
         should_process "Repair events for session ${id:0:8}" || exit 0
+        dir="$(session_path "$id")" ||
+            die "Session '$id' changed before it could be repaired."
         node "$HELPER" repair-events "$dir" "${nobackup[@]}"
         ;;
     compress)
@@ -71,8 +70,10 @@ case "$cmd" in
             esac
         done
         [[ -n "$id" ]] || die 'compress requires a session id.'
-        dir="$(session_path "$id")" || die "Session '$id' not found."
+        session_path "$id" >/dev/null || exit 1
         should_process "Compress session ${id:0:8}" || exit 0
+        dir="$(session_path "$id")" ||
+            die "Session '$id' changed before it could be compressed."
         node "$HELPER" compress "$dir" "${keep[@]}" "${nobackup[@]}"
         ;;
     merge)
@@ -87,17 +88,48 @@ case "$cmd" in
         [[ ${#ids[@]} -ge 2 ]] || die 'merge requires at least two session ids.'
         dirs=()
         for id in "${ids[@]}"; do
-            d="$(session_path "$id")" || die "Session '$id' not found."
+            d="$(session_path "$id")" || exit 1
             dirs+=("$d")
         done
         state_dir="$(copilot_session_state_dir)"
+        state_dir="$(cd -- "$state_dir" && pwd -P)"
         new_id="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
         new_dir="$state_dir/$new_id"
         if ! should_process "Merge ${#ids[@]} sessions into $new_id"; then exit 0; fi
-        mkdir -p "$new_dir"
-        result_id="$(node "$HELPER" merge "$new_dir" "${dirs[@]}")" || { rm -rf "$new_dir"; die 'Merge failed.'; }
+
+        dirs=()
+        for id in "${ids[@]}"; do
+            d="$(session_path "$id")" ||
+                die "Session '$id' changed before it could be merged."
+            dirs+=("$d")
+        done
+        set +e
+        result_id="$(node "$HELPER" merge "$new_dir" "${dirs[@]}")"
+        merge_status=$?
+        set -e
+        if [[ "$merge_status" -ne 0 ]]; then
+            if [[ -e "$new_dir" || -L "$new_dir" ]]; then
+                if ! rm -rf -- "$new_dir"; then
+                    log_error "Failed to remove partial merged session: $new_dir"
+                fi
+            fi
+            die "$merge_status" 'Merge failed.'
+        fi
+        [[ "$result_id" == "$new_id" ]] || {
+            rm -rf -- "$new_dir" ||
+                log_error "Failed to remove invalid merged session: $new_dir"
+            die 'Merge returned an unexpected session id.'
+        }
         if [[ "$remove_source" == "1" ]]; then
-            for d in "${dirs[@]}"; do
+            current_dirs=()
+            for i in "${!ids[@]}"; do
+                d="$(session_path "${ids[$i]}")" ||
+                    die "Source session '${ids[$i]}' changed before removal."
+                [[ "$d" == "${dirs[$i]}" ]] ||
+                    die "Source session '${ids[$i]}' changed before removal."
+                current_dirs+=("$d")
+            done
+            for d in "${current_dirs[@]}"; do
                 log_verbose "Removing source session: $d"
                 rm -rf -- "$d"
             done

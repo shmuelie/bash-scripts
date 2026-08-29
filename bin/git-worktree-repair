@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# git-worktree-repair — repair worktree links after moves.
+# Ported from Repair-Worktree.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { echo 'Usage: git-worktree-repair [--repository-path <repository>] [--dry-run] [paths...]'; }
+repo_arg=''; paths=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -C|--repository-path) repo_arg="$2"; shift 2 ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        -v|--verbose) VERBOSE=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *) paths+=("$1"); shift ;;
+    esac
+done
+require_cmd git
+repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
+target="$repo"; [[ ${#paths[@]} -gt 0 ]] && target="${paths[*]}"
+should_process "Repair git worktree links for $target" || exit 0
+git -C "$repo" worktree repair "${paths[@]}"

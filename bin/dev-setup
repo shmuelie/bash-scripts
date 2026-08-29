@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# dev-setup — check or apply declarative developer-machine resources.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/setup/dev-setup.sh"
+
+usage() { cat <<'EOF'
+Usage: dev-setup check|apply <config.json> [--json] [--dry-run] [--force]
+
+Validate and process a version 1 JSON config:
+  {"version":1,"resources":[
+    {"type":"symlink","path":"...","target":"...","force":false},
+    {"type":"copilotPlugin","source":"owner/repo","name":"optional"},
+    {"type":"copilotMarketplace","name":"market","repository":"owner/repo"},
+    {"type":"uvTool","name":"tool"}
+  ]}
+
+check exits non-zero if any resource is unsatisfied. apply is idempotent,
+continues after failures, and supports --dry-run. --force permits replacing
+non-directory paths for symlink resources; force:true can opt in per resource.
+URL plugin sources require an explicit name.
+EOF
+}
+
+mode="${1:-}"
+case "$mode" in
+    -h|--help) usage; exit 0 ;;
+    check|apply) shift ;;
+    '') usage; exit 2 ;;
+    *) die "Unknown command: $mode (see --help)" ;;
+esac
+
+config=''
+force=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --json) JSON=1; shift ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        --force) force=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *)
+            [[ -z "$config" ]] || die 'dev-setup accepts exactly one config file.'
+            config="$1"
+            shift
+            ;;
+    esac
+done
+
+[[ -n "$config" ]] || die 'A config file is required.'
+[[ -f "$config" ]] || die "Config file not found: $config"
+require_cmd jq
+if ! validate_setup_config "$config"; then
+    die 'Invalid setup config. Expected version 1 and valid symlink, copilotPlugin, copilotMarketplace, or uvTool resources.'
+fi
+[[ "$mode" == "apply" ]] || {
+    [[ "$DRY_RUN" == "0" ]] || die '--dry-run is only valid with apply.'
+    [[ "$force" == "0" ]] || die '--force is only valid with apply.'
+}
+
+mapfile -t resources < <(jq -c '.resources[]' "$config")
+results=()
+overall=0
+index=0
+for resource in "${resources[@]:-}"; do
+    [[ -n "$resource" ]] || continue
+    type="$(jq -r '.type' <<< "$resource")"
+    name="$(setup_resource_name "$resource")"
+    SETUP_MESSAGE=''
+
+    check_status=0
+    check_setup_resource "$resource" || check_status=$?
+    if [[ "$check_status" == "0" ]]; then
+        status='satisfied'
+        result="$(make_setup_result "$index" "$type" "$name" "$status" true false "$SETUP_MESSAGE")"
+    elif [[ "$check_status" -gt 1 ]]; then
+        status='failed'
+        overall=1
+        result="$(make_setup_result "$index" "$type" "$name" "$status" false false "$SETUP_MESSAGE")"
+    elif [[ "$mode" == "check" ]]; then
+        status='unsatisfied'
+        overall=1
+        result="$(make_setup_result "$index" "$type" "$name" "$status" false false "$SETUP_MESSAGE")"
+    elif [[ "$DRY_RUN" == "1" ]]; then
+        description="$(setup_action_description "$resource")"
+        if [[ "$JSON" == "1" ]]; then
+            should_process "$description" 2>/dev/null || true
+        else
+            should_process "$description" || true
+        fi
+        status='wouldChange'
+        result="$(make_setup_result "$index" "$type" "$name" "$status" false false "$SETUP_MESSAGE")"
+    else
+        SETUP_MESSAGE=''
+        if apply_setup_resource "$resource" "$force"; then
+            status='changed'
+            result="$(make_setup_result "$index" "$type" "$name" "$status" true true "$SETUP_MESSAGE")"
+        else
+            status='failed'
+            overall=1
+            result="$(make_setup_result "$index" "$type" "$name" "$status" false false "$SETUP_MESSAGE")"
+        fi
+    fi
+    results+=("$result")
+    if [[ "$JSON" != "1" ]]; then
+        printf '[%s] %s %s — %s\n' "$status" "$type" "$name" "$SETUP_MESSAGE"
+    fi
+    index=$((index + 1))
+done
+
+if [[ "$JSON" == "1" ]]; then
+    if [[ ${#results[@]} -eq 0 ]]; then
+        printf '[]\n'
+    else
+        printf '%s\n' "${results[@]}" | jq -s .
+    fi
+fi
+exit "$overall"

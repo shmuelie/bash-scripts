@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# git-worktree-unlock — unlock a worktree by actual branch or path.
+# Ported from Unlock-Worktree.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+
+usage() { echo 'Usage: git-worktree-unlock [-C <repository>] [--path] <branch-or-path>'; }
+repo_arg=''; value=''; mode='auto'
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -C|--repository-path) repo_arg="$2"; shift 2 ;;
+        --path) mode='path'; shift ;;
+        --dry-run|--whatif) DRY_RUN=1; shift ;;
+        -v|--verbose) VERBOSE=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *) [[ -z "$value" ]] || die "Unexpected argument: $1"; value="$1"; shift ;;
+    esac
+done
+[[ -n "$value" ]] || { usage >&2; exit 2; }
+require_cmd git
+repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
+row="$(git_resolve_worktree_target "$repo" "$mode" "$value")" || exit 1
+path="${row%%"$SHM_FS"*}"
+should_process "Unlock worktree at $path" || exit 0
+git -C "$repo" worktree unlock -- "$path"

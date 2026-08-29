@@ -35,6 +35,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Added consistent Git repository path targeting, complete worktree state and
+  path addressing, custom worktree destinations, worktree prune/repair/lock/
+  unlock/move helpers, bulk worktree updates, and multi-account GitHub fetch.
+- Added global Copilot session selection, assisted approval, allow-all-tools,
+  usage-output, native MCP enable flags, and canonical session path guards.
+- Added `git-status-segment` and `format-duration` prompt-formatting helpers.
+- Added opt-in dependency installation to `install.sh` with package-manager
+  detection, dependency tiers, dry-run, and post-install checks.
+- Added `dev-setup` declarative check/apply support for symlinks, Copilot
+  plugins/marketplaces, and uv tools, plus `uv-tool`.
 - Foundation: repository scaffolding, `lib/common.sh` shared helpers
   (logging, dry-run/ShouldProcess, JSON, dependency checks, fzf/`select`
   picker), `build/` lint + public-content scan + test runner, and CI.

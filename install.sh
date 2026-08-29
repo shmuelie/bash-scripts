@@ -24,6 +24,10 @@ do_completions=1
 uninstall=0
 update=0
 rc_override=''
+install_deps=0
+deps_tier='required'
+deps_specified=0
+dry_run=0
 
 msg()  { printf '%s\n' "$*"; }
 warn() { printf 'Warning: %s\n' "$*" >&2; }
@@ -41,6 +45,10 @@ Options:
   --no-completions        Do not wire up shell completions.
   --update                git pull the repo, then refresh the install.
   --uninstall             Remove symlinks and the rc block this installer added.
+  --install-deps          Opt in to package-manager dependency installation.
+  --deps required|all     Install required dependencies (default), or known
+                          development and optional packages too.
+  --dry-run               Show the dependency install command without running it.
   -h, --help              Show this help.
 EOF
 }
@@ -53,12 +61,27 @@ while [[ $# -gt 0 ]]; do
         --no-completions) do_completions=0; shift ;;
         --update) update=1; shift ;;
         --uninstall) uninstall=1; shift ;;
+        --install-deps) install_deps=1; shift ;;
+        --deps)
+            [[ $# -ge 2 ]] || die '--deps requires required or all.'
+            deps_tier="$2"
+            deps_specified=1
+            shift 2
+            ;;
+        --dry-run|--whatif) dry_run=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "Unknown option: $1 (see --help)" ;;
     esac
 done
 
 [[ "$method" == "symlink" || "$method" == "path" ]] || die "Invalid --method: $method"
+[[ "$deps_tier" == "required" || "$deps_tier" == "all" ]] || die "Invalid --deps: $deps_tier"
+[[ "$deps_specified" == "0" || "$install_deps" == "1" ]] ||
+    die '--deps is only meaningful with --install-deps.'
+[[ "$dry_run" == "0" || "$install_deps" == "1" ]] ||
+    die '--dry-run is only meaningful with --install-deps.'
+[[ "$uninstall" == "0" || "$install_deps" == "0" ]] ||
+    die 'Use --uninstall or --install-deps, not both.'
 [[ "$update" == "1" && "$uninstall" == "1" ]] && die "Use --update or --uninstall, not both."
 
 # --- Locate the repo, bootstrapping via git clone when piped from curl -------
@@ -88,6 +111,9 @@ if ! REPO="$(resolve_repo)"; then
     reexec=(--method "$method" --prefix "$prefix")
     [[ "$do_completions" == "0" ]] && reexec+=(--no-completions)
     [[ "$uninstall" == "1" ]] && reexec+=(--uninstall)
+    [[ "$update" == "1" ]] && reexec+=(--update)
+    [[ "$install_deps" == "1" ]] && reexec+=(--install-deps --deps "$deps_tier")
+    [[ "$dry_run" == "1" ]] && reexec+=(--dry-run)
     [[ -n "$rc_override" ]] && reexec+=(--rc "$rc_override")
     exec "$DATA_DIR/install.sh" "${reexec[@]}"
 fi
@@ -112,11 +138,20 @@ rc_shell_kind() {
 remove_rc_block() {
     [[ -f "$RC" ]] || return 0
     if grep -qF "$MARK_BEGIN" "$RC"; then
-        local tmp; tmp="$(mktemp)"
-        awk -v b="$MARK_BEGIN" -v e="$MARK_END" '
+        local tmp mode
+        tmp="$(mktemp "${RC}.bash-scripts.XXXXXX")"
+        if ! awk -v b="$MARK_BEGIN" -v e="$MARK_END" '
             $0==b {skip=1} skip==0 {print} $0==e {skip=0}
-        ' "$RC" > "$tmp"
-        mv "$tmp" "$RC"
+        ' "$RC" > "$tmp"; then
+            rm -f -- "$tmp"
+            return 1
+        fi
+        mode="$(stat -c '%a' "$RC" 2>/dev/null || stat -f '%Lp' "$RC" 2>/dev/null || true)"
+        [[ -z "$mode" ]] || chmod "$mode" "$tmp"
+        if ! mv "$tmp" "$RC"; then
+            rm -f -- "$tmp"
+            return 1
+        fi
         msg "Removed bash-scripts block from $RC"
     fi
 }
@@ -217,6 +252,15 @@ if [[ "$update" == "1" ]]; then
     update_repo
 fi
 
+deps_status=0
+if [[ "$install_deps" == "1" ]]; then
+    [[ -f "$REPO/lib/setup/install-deps.sh" ]] ||
+        die 'Dependency installer library is missing; update the repository and retry.'
+    SHM_FS=$'\x1f'
+    source "$REPO/lib/setup/install-deps.sh"
+    install_dependencies "$deps_tier" "$dry_run" || deps_status=$?
+fi
+
 check_deps
 
 if [[ "$method" == "symlink" ]]; then
@@ -229,3 +273,4 @@ if [[ -n "$block" ]]; then
 fi
 
 msg "Done. Installed via '$method'."
+exit "$deps_status"

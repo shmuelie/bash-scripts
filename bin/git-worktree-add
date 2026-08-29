@@ -1,37 +1,47 @@
 #!/usr/bin/env bash
 # git-worktree-add — check out an existing branch to a worktree.
-# Ported from Add-Worktree. Prints the worktree path on success.
+# Ported from Add-Worktree. Prints the created path on success.
 set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
 source "$_SHM_ROOT/lib/git/git-common.sh"
 
 usage() { cat <<'EOF'
-Usage: git-worktree-add [--dry-run] [-v] <branch>
+Usage: git-worktree-add [options] <branch>
 
-Check out an existing branch to a new worktree. Prints the worktree path.
+Options:
+  --path, -C <repository-or-child>  Repository to use.
+  --worktree-path <destination>     Explicit destination.
+  --dry-run, --whatif               Preview without creating.
+  -v, --verbose                     Verbose output.
 EOF
 }
 
-branch=''
+branch=''; repo_arg=''; destination=''
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
+        --path|-C) repo_arg="$2"; shift 2 ;;
+        --worktree-path) destination="$2"; shift 2 ;;
         --dry-run|--whatif) DRY_RUN=1; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
         -*) die "Unknown option: $1" ;;
-        *) branch="$1"; shift ;;
+        *) [[ -z "$branch" ]] || die "Unexpected argument: $1"; branch="$1"; shift ;;
     esac
 done
 
 [[ -n "$branch" ]] || { usage >&2; die 'branch is required.'; }
 require_cmd git
-
-worktree_path="$(git_worktree_path "$branch")" || die 'Not in a git repository.'
-
-if ! should_process "Add worktree for branch '$branch' at $worktree_path"; then
-    exit 0
+repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
+if [[ -n "$destination" ]]; then
+    worktree_path="$(git_absolute_from_base "$repo" "$destination")"
+else
+    worktree_path="$(git_worktree_path "$repo" "$branch")"
 fi
-
-git worktree add "$worktree_path" "$branch" >&2
+should_process "Add worktree for branch '$branch' at $worktree_path" || exit 0
+if ! output="$(git -C "$repo" worktree add "$worktree_path" "$branch" 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    die "git worktree add failed for branch '$branch' at '$worktree_path'."
+fi
+[[ -n "$output" ]] && printf '%s\n' "$output" >&2
 printf '%s\n' "$worktree_path"

@@ -12,11 +12,36 @@ Usage: copilot-session <command> [args]
 
 Commands:
   list [--all] [--id <id>] [--json]   List sessions (defaults to current dir).
+  select [filters] [prompt] [-- copilot-args...]
+                                       Select a session globally and resume it.
   resume <id> [prompt] [-- copilot-args...]
                                        Resume a session (autopilot if prompt given).
   rename <id> <new-name>               Rename a session (updates workspace.yaml).
   remove <id>... [--dry-run]           Remove sessions by id.
+
+Select filters:
+  --id <glob> --repository <glob> --branch <glob> --first <n>
+  --stay-in-directory --dry-run/--whatif
 EOF
+}
+
+glob_matches() {
+    local value="$1" pattern="$2" status had_nocasematch=0
+    shopt -q nocasematch && had_nocasematch=1
+    shopt -s nocasematch
+    # shellcheck disable=SC2053  # intentional glob match, mirrors PowerShell -like
+    [[ "$value" == $pattern ]]
+    status=$?
+    [[ "$had_nocasematch" == "1" ]] || shopt -u nocasematch
+    return "$status"
+}
+
+one_line() {
+    local value="$1"
+    value="${value//$'\r'/ }"
+    value="${value//$'\n'/ }"
+    value="${value//$'\t'/ }"
+    printf '%s' "$value"
 }
 
 cmd="${1:-}"; shift || true
@@ -37,6 +62,7 @@ case "$cmd" in
                 *) die "Unknown option: $1" ;;
             esac
         done
+        [[ -z "$only_id" ]] || copilot_validate_session_id "$only_id"
         id_args=(); [[ -n "$only_id" ]] && id_args=(--id "$only_id")
         if [[ "$json" == "1" ]]; then
             require_cmd jq
@@ -57,6 +83,87 @@ case "$cmd" in
             done < <(copilot_sessions "${all_flag[@]}" "${id_args[@]}")
         fi
         ;;
+    select)
+        id_glob='*'; repository_glob='*'; branch_glob='*'; first=0
+        stay=0; prompt=''; rest=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --id|--repository|--branch|--first)
+                    [[ $# -ge 2 ]] || die "$1 requires a value."
+                    case "$1" in
+                        --id) id_glob="$2" ;;
+                        --repository) repository_glob="$2" ;;
+                        --branch) branch_glob="$2" ;;
+                        --first)
+                            [[ "$2" =~ ^[1-9][0-9]*$ ]] ||
+                                die '--first requires a positive integer.'
+                            first="$2"
+                            ;;
+                    esac
+                    shift 2 ;;
+                --stay-in-directory) stay=1; shift ;;
+                --dry-run|--whatif) DRY_RUN=1; shift ;;
+                --) shift; rest+=("$@"); break ;;
+                -*) die "Unknown select option: $1" ;;
+                *)
+                    [[ -z "$prompt" ]] || die 'select accepts only one prompt; place Copilot arguments after --.'
+                    prompt="$1"
+                    shift ;;
+            esac
+        done
+
+        rows=()
+        # shellcheck disable=SC2034  # unpacking a fixed row; not all fields used here
+        while IFS="$SHM_FS" read -r id name s_cwd branch repo created updated ecount esize path; do
+            [[ -n "$id" ]] || continue
+            glob_matches "$id" "$id_glob" || continue
+            glob_matches "$repo" "$repository_glob" || continue
+            glob_matches "$branch" "$branch_glob" || continue
+            rows+=("$id$SHM_FS$name$SHM_FS$s_cwd$SHM_FS$branch$SHM_FS$repo$SHM_FS$created$SHM_FS$updated$SHM_FS$ecount$SHM_FS$esize$SHM_FS$path")
+            [[ "$first" -gt 0 && ${#rows[@]} -ge "$first" ]] && break
+        done < <(copilot_sessions --all)
+
+        [[ ${#rows[@]} -gt 0 ]] ||
+            die 'No Copilot sessions matched the requested filters.'
+        if [[ "${DRY_RUN:-0}" == "1" && ${#rows[@]} -gt 1 ]]; then
+            die 'Multiple Copilot sessions matched; refine the filters or use --first 1 for dry-run.'
+        fi
+
+        selected=0
+        if [[ ${#rows[@]} -gt 1 ]]; then
+            labels=()
+            for i in "${!rows[@]}"; do
+                IFS="$SHM_FS" read -r id name s_cwd branch repo created updated ecount esize path <<<"${rows[$i]}"
+                labels+=("$((i + 1))) $(one_line "$name") | $(one_line "$repo") | $(one_line "$branch") | $(one_line "$s_cwd") | $(one_line "$updated") | events: $ecount")
+            done
+            choice="$(printf '%s\n' "${labels[@]}" | pick_one 'Session')" ||
+                die 'No Copilot session selected.'
+            choice_index="${choice%%)*}"
+            [[ "$choice_index" =~ ^[1-9][0-9]*$ &&
+               "$choice_index" -le ${#rows[@]} ]] ||
+                die 'Invalid Copilot session selection.'
+            selected=$((choice_index - 1))
+        fi
+
+        IFS="$SHM_FS" read -r id name s_cwd branch repo created updated ecount esize path <<<"${rows[$selected]}"
+        copilot_resolve_session_dir "$id" >/dev/null ||
+            die "Session '$id' is no longer available."
+        launch_cwd="$(pwd -P)"
+        if [[ "$stay" == "0" ]]; then
+            [[ -n "$s_cwd" ]] || die "Session '$id' has no recorded working directory."
+            [[ -d "$s_cwd" ]] ||
+                die "Recorded working directory for session '$id' does not exist: $s_cwd"
+            launch_cwd="$s_cwd"
+        fi
+
+        cargs=(--allow-all --experimental --resume "$id")
+        [[ -n "$prompt" ]] && cargs+=(--autopilot -p "$prompt")
+        [[ ${#rest[@]} -gt 0 ]] && cargs+=("${rest[@]}")
+        if ! should_process "Resume Copilot session $id from $launch_cwd"; then exit 0; fi
+        exe="$(resolve_copilot)"
+        cd -- "$launch_cwd"
+        exec "$exe" "${cargs[@]}"
+        ;;
     resume)
         id="${1:-}"; shift || true
         [[ -n "$id" ]] || die 'resume requires a session id.'
@@ -69,9 +176,7 @@ case "$cmd" in
                 *) if [[ -z "$prompt" ]]; then prompt="$1"; else rest+=("$1"); fi; shift ;;
             esac
         done
-        # Verify the session exists.
-        found="$(copilot_sessions --id "$id" | head -n1)"
-        [[ -n "$found" ]] || die "Session '$id' not found."
+        copilot_resolve_session_dir "$id" >/dev/null || exit 1
         exe="$(resolve_copilot)"
         cargs=(--allow-all --experimental --resume "$id")
         [[ -n "$prompt" ]] && cargs+=(--autopilot -p "$prompt")
@@ -81,13 +186,13 @@ case "$cmd" in
     rename)
         id="${1:-}"; new_name="${2:-}"
         [[ -n "$id" && -n "$new_name" ]] || die 'rename requires <id> and <new-name>.'
-        row="$(copilot_sessions --id "$id" | head -n1)"
-        [[ -n "$row" ]] || die "Session '$id' not found."
-        path="$(printf '%s' "$row" | cut -d"$SHM_FS" -f10)"
-        ws="$path/workspace.yaml"
-        [[ -f "$ws" ]] || die "workspace.yaml not found for session $id."
+        copilot_resolve_session_dir "$id" >/dev/null || exit 1
         if ! should_process "Rename session ${id:0:8} to '$new_name'"; then exit 0; fi
 
+        path="$(copilot_resolve_session_dir "$id")" ||
+            die "Session '$id' changed before it could be renamed."
+        ws="$path/workspace.yaml"
+        [[ -f "$ws" ]] || die "workspace.yaml not found for session $id."
         updates=(name "$new_name")
         if workspace_yaml_has "$ws" summary; then
             updates+=(summary "$new_name")
@@ -105,14 +210,25 @@ case "$cmd" in
             esac
         done
         [[ ${#ids[@]} -gt 0 ]] || die 'remove requires at least one session id.'
+        remove_failed=0
         for id in "${ids[@]}"; do
+            if ! copilot_resolve_session_dir "$id" >/dev/null; then
+                remove_failed=1
+                continue
+            fi
             row="$(copilot_sessions --id "$id" | head -n1)"
-            if [[ -z "$row" ]]; then log_warn "Session '$id' not found."; continue; fi
+            if [[ -z "$row" ]]; then
+                log_warn "Session '$id' not found."
+                remove_failed=1
+                continue
+            fi
             name="$(printf '%s' "$row" | cut -d"$SHM_FS" -f2)"
-            path="$(printf '%s' "$row" | cut -d"$SHM_FS" -f10)"
             if ! should_process "Remove session: $name ($id)"; then continue; fi
+            path="$(copilot_resolve_session_dir "$id")" ||
+                die "Session '$id' changed before it could be removed."
             rm -rf -- "$path"
         done
+        [[ "$remove_failed" == "0" ]] || exit 1
         ;;
     *) die "Unknown command: $cmd (see --help)" ;;
 esac

@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# git-status-segment — render a colored prompt segment from git-status-summary.
+# Ported from Format-GitStatusSegment.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+
+usage() { cat <<'EOF'
+Usage: git-status-segment [--no-change-counts] [--no-color] [--ps1] [path]
+
+Render the Git status for path (default: current directory) as a capturable
+prompt segment. It reuses git-status-summary and prints nothing outside a Git
+repository. Untracked files are included in the working-tree added count.
+
+Branch color reflects upstream state: bright green ahead, bright red behind,
+bright yellow diverged, cyan when the upstream is gone, and bright cyan
+otherwise. Operations are bright magenta, staged counts green, working counts
+red, conflicts bright red, and brackets/separators bright yellow.
+
+Options:
+  --no-change-counts  Show only branch, operation, and upstream relation.
+  --no-color          Omit ANSI color sequences.
+  --ps1               Mark ANSI sequences as non-printing for Bash readline.
+  -h, --help          Show this help.
+
+Example PS1:
+  PS1='$(git-status-segment --ps1) \w\$ '
+EOF
+}
+
+show_counts=1
+color=1
+ps1=0
+path=''
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --no-change-counts) show_counts=0; shift ;;
+        --no-color) color=0; shift ;;
+        --ps1) ps1=1; shift ;;
+        -*) die "Unknown option: $1" ;;
+        *)
+            [[ -z "$path" ]] || die 'git-status-segment accepts at most one path.'
+            path="$1"
+            shift
+            ;;
+    esac
+done
+
+require_cmd jq
+summary_args=(--json)
+[[ -n "$path" ]] && summary_args+=("$path")
+summary="$("$_SHM_ROOT/bin/git-status-summary" "${summary_args[@]}")"
+[[ "$(printf '%s' "$summary" | jq -r '.isGitRepo')" == "true" ]] || exit 0
+
+IFS=$'\x1f' read -r branch upstream ahead behind upstream_gone operation \
+    index_added index_modified index_deleted working_added working_modified \
+    working_deleted conflicts untracked < <(
+        printf '%s' "$summary" | jq -r '[
+            .branch, (.upstream // ""), (.aheadBy|tostring), (.behindBy|tostring),
+            (.upstreamGone|tostring), (.operation // ""),
+            (.indexAdded|tostring), (.indexModified|tostring), (.indexDeleted|tostring),
+            (.workingAdded|tostring), (.workingModified|tostring), (.workingDeleted|tostring),
+            (.conflicts|tostring), (.untracked|tostring)
+        ] | join("\u001f")'
+    )
+
+np_start=''; np_end=''
+if [[ "$color" == "1" ]]; then
+    [[ "$ps1" == "1" ]] && { np_start=$'\001'; np_end=$'\002'; }
+    bright_yellow="${np_start}"$'\033[93m'"${np_end}"
+    bright_magenta="${np_start}"$'\033[95m'"${np_end}"
+    green="${np_start}"$'\033[32m'"${np_end}"
+    red="${np_start}"$'\033[31m'"${np_end}"
+    bright_red="${np_start}"$'\033[91m'"${np_end}"
+    reset="${np_start}"$'\033[0m'"${np_end}"
+else
+    bright_yellow=''
+    bright_magenta=''
+    green=''
+    red=''
+    bright_red=''
+    reset=''
+fi
+
+if [[ "$upstream_gone" == "true" ]]; then
+    branch_color="${np_start}"$'\033[36m'"${np_end}"
+elif [[ "$ahead" -gt 0 && "$behind" -gt 0 ]]; then
+    branch_color="${np_start}"$'\033[93m'"${np_end}"
+elif [[ "$ahead" -gt 0 ]]; then
+    branch_color="${np_start}"$'\033[92m'"${np_end}"
+elif [[ "$behind" -gt 0 ]]; then
+    branch_color="${np_start}"$'\033[91m'"${np_end}"
+else
+    branch_color="${np_start}"$'\033[96m'"${np_end}"
+fi
+[[ "$color" == "1" ]] || branch_color=''
+
+relation=''
+if [[ "$ahead" -gt 0 && "$behind" -gt 0 ]]; then
+    relation="↓${behind} ↑${ahead}"
+elif [[ "$ahead" -gt 0 ]]; then
+    relation="↑${ahead}"
+elif [[ "$behind" -gt 0 ]]; then
+    relation="↓${behind}"
+elif [[ "$upstream_gone" == "true" ]]; then
+    relation='×'
+elif [[ -n "$upstream" ]]; then
+    relation='≡'
+fi
+
+segment="${bright_yellow}[${branch_color}${branch}"
+[[ -n "$operation" ]] && segment+="${bright_magenta}|${operation}"
+[[ -n "$relation" ]] && segment+="${branch_color} ${relation}"
+
+if [[ "$show_counts" == "1" ]]; then
+    folded_added=$((working_added + untracked))
+    has_index=$((index_added + index_modified + index_deleted))
+    has_working=$((folded_added + working_modified + working_deleted))
+    if [[ "$has_index" -gt 0 ]]; then
+        segment+="${green} +${index_added} ~${index_modified} -${index_deleted}"
+    fi
+    if [[ "$has_index" -gt 0 || "$has_working" -gt 0 ]]; then
+        segment+="${bright_yellow} |"
+    fi
+    if [[ "$has_working" -gt 0 ]]; then
+        segment+="${red} +${folded_added} ~${working_modified} -${working_deleted}"
+    fi
+    if [[ "$conflicts" -gt 0 ]]; then
+        segment+="${bright_red} !${conflicts}"
+    fi
+fi
+
+segment+="${bright_yellow}]${reset}"
+printf '%s\n' "$segment"

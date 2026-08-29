@@ -1,36 +1,33 @@
 #!/usr/bin/env bash
-# git-worktree-switch — resolve a worktree by branch name and print its path.
-# Ported from Set-Worktree. Since a child process cannot change the parent
-# shell's directory, this prints the path; use: cd "$(git-worktree-switch main)".
+# git-worktree-switch — resolve a worktree and print its actual path.
+# Ported from Set-Worktree.
 set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
 source "$_SHM_ROOT/lib/git/git-common.sh"
 
 usage() { cat <<'EOF'
-Usage: git-worktree-switch <branch>
-
-Print the path of the worktree for <branch>. Use with cd:
-    cd "$(git-worktree-switch main)"
+Usage: git-worktree-switch [-C <repository>] <branch>
+       git-worktree-switch [-C <repository>] --path <worktree-path>
 EOF
 }
 
-case "${1:-}" in
-    -h|--help|'') usage; [[ -n "${1:-}" ]] && exit 0 || exit 2 ;;
-esac
-
+repo_arg=''; branch=''; target_path=''
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --path) target_path="$2"; shift 2 ;;
+        -C|--repository-path) repo_arg="$2"; shift 2 ;;
+        -*) die "Unknown option: $1" ;;
+        *) [[ -z "$branch" ]] || die "Unexpected argument: $1"; branch="$1"; shift ;;
+    esac
+done
+[[ -z "$branch" || -z "$target_path" ]] || die 'Specify either a branch or --path, not both.'
+[[ -n "$branch" || -n "$target_path" ]] || { usage >&2; exit 2; }
 require_cmd git
-branch="$1"
-path=''
-while IFS=$'\t' read -r wt_path _ wt_branch; do
-    if [[ "$wt_branch" == "$branch" ]]; then
-        path="$wt_path"
-        break
-    fi
-done < <(git_worktrees)
-
-if [[ -n "$path" && -d "$path" ]]; then
-    printf '%s\n' "$path"
-else
-    die "No worktree found for branch '$branch'."
-fi
+repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
+if [[ -n "$target_path" ]]; then row="$(git_resolve_worktree_target "$repo" path "$target_path")"
+else row="$(git_resolve_worktree_target "$repo" branch "$branch")"; fi
+path="${row%%"$SHM_FS"*}"
+[[ -d "$path" ]] || die "Worktree path '$path' does not exist."
+printf '%s\n' "$path"

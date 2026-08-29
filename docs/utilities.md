@@ -9,10 +9,10 @@ from `lib/utils/shell-integration.sh`.
 
 | Area | Command |
 |---|---|
-| Core | `is-elevated`, `in-location`, `repair-global-json`, `reset-terminal` |
+| Core | `is-elevated`, `in-location`, `repair-global-json`, `reset-terminal`, `format-duration` |
 | Shell integration (sourced) | `shm_global_constant`, `shm_path_constant`, `shm_prepend_path`, `shm_session_title`, `shm_source_safe` |
 | .NET tools | `dotnet-tool list/install/update/uninstall` |
-| Python | `pip-package list/update`, `uv-package list/update` |
+| Python | `pip-package list/update`, `uv-package list/update`, `uv-tool list/install` |
 | VS Code | `start-vscode`, `vscode-chat`, `vscode-ext list/install/uninstall/update` |
 | Services | `service-process` (systemd) |
 | Diagnostics | `perf-record start/stop` (perf) |
@@ -29,6 +29,8 @@ from `lib/utils/shell-integration.sh`.
   sequence (`Reset-TerminalModes`); no-ops when stdout is redirected.
 - `dotnet-tool`, `pip-package`, `uv-package`, `vscode-ext` — tool management
   wrappers with `--json` output and `--dry-run` previews.
+- `format-duration` — compact elapsed-time formatting from seconds or
+  milliseconds (`H:MM:SS.mmm`, `M:SS.mmm`, or `<seconds> seconds`).
 - `pip-package` and `uv-package` extract a complete JSON payload even when the
   underlying tool prints warning lines around it, and fail clearly if none is
   present.
@@ -62,6 +64,7 @@ dotnet-tool list --json | jq -r '.[].packageId'
 service-process cron --pid-only | xargs -r kill
 installed-apps --source snap
 reset-terminal
+format-duration --milliseconds 61005
 ```
 
 ## Requirements
