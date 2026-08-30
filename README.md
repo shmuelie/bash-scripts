@@ -28,6 +28,14 @@ into `~/.local/bin`, and wires up completions):
 curl -fsSL https://raw.githubusercontent.com/shmuelie/bash-scripts/main/install.sh | bash
 ```
 
+To pass installer flags to the quick install, use `bash -s --` followed by the
+normal `install.sh` options:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shmuelie/bash-scripts/main/install.sh \
+  | bash -s -- --install-deps --deps all
+```
+
 Or from a clone:
 
 ```bash
