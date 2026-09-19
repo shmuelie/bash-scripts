@@ -47,8 +47,32 @@ if ! should_process "Execute: $COPILOT_EXE ${COPILOT_ARGS[*]}"; then
 fi
 
 set +e
+trap 'exit_code=130' INT
+# fg can unwind its calling command on a stop; a function boundary keeps the
+# supervision loop alive for repeated suspend/resume.
+copilot_resume_job() { fg %+ >/dev/null; }
+monitor_was_on=0; use_job_control=0
+[[ "$-" != *m* ]] || monitor_was_on=1
+if [[ -t 0 && -t 1 ]]; then
+    use_job_control=1
+    set -m
+fi
 "$COPILOT_EXE" "${COPILOT_ARGS[@]}"
 exit_code=$?
+if [[ "$use_job_control" == "1" ]]; then
+    while [[ -n "$(jobs -sp)" ]]; do
+        # A stopped child is not a failed exit. Let the caller foreground this
+        # wrapper, then return the same native job to the terminal.
+        kill -STOP "$$"
+        copilot_resume_job
+        exit_code=$?
+    done
+fi
+# An interrupted fg can unwind the compound command before exit_code is saved.
+control_status=$?
+[[ "$control_status" == "0" ]] || exit_code="$control_status"
+if [[ "$use_job_control" == "1" && "$monitor_was_on" == "0" ]]; then set +m; fi
+trap - INT
 set -e
 
 # Recover the terminal if the engine crashed out of its TUI.

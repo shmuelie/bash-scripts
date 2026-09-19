@@ -179,6 +179,28 @@ start-copilot --no-auto-resume --selector ./choose-session --model fast
 `start-copilot` runs in place. `copilot-session resume` execs `copilot`
 directly.
 
+### Terminal lifecycle
+
+With terminal stdin and stdout, `start-copilot` temporarily enables Bash job
+control so the native CLI owns its foreground process group. tmux's
+`pane_current_command` and default automatic window naming therefore show the
+native `copilot`, without changing tmux configuration. The wrapper remains
+available to run `reset-terminal` on a nonzero exit and preserves the original
+exit status; successful exits do not reset the terminal.
+
+Ctrl+C interrupts the native foreground job, with status 130 and recovery when
+it terminates from that signal. Ctrl+Z suspends both native job and wrapper;
+use the calling shell's `fg` to resume the same process. Stops are not treated as
+failed exits, including repeated suspend/resume. Background interaction is not a
+replacement for `fg`: a terminal-reading CLI must run in the foreground.
+Redirected execution does not enable job control. The launcher's prior monitor
+setting is restored before terminal recovery. Native process naming applies to
+native executables; shell-script shims may still identify as their interpreter.
+
+Terminal regression coverage uses a compiled native mock and a private tmux
+socket, including actual reset escape sequences. It requires `cc`, `python3`,
+and `tmux`; that optional suite explicitly skips when they are unavailable.
+
 ## Session maintenance
 
 The event-stream algorithms (relocating orphaned tool events, synthesizing
