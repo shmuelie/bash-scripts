@@ -12,7 +12,7 @@ from `lib/utils/shell-integration.sh`.
 | Core | `is-elevated`, `in-location`, `repair-global-json`, `reset-terminal`, `format-duration` |
 | Shell integration (sourced) | `shm_global_constant`, `shm_path_constant`, `shm_prepend_path`, `shm_session_title`, `shm_source_safe` |
 | .NET tools | `dotnet-tool list/install/update/uninstall` |
-| Python | `pip-package list/update`, `uv-package list/update`, `uv-tool list/install` |
+| Python | `pip-package list/update`, `uv-package list/update`, `uv-tool list/install/update` |
 | VS Code | `start-vscode`, `vscode-chat`, `vscode-ext list/install/uninstall/update` |
 | Services | `service-process` (systemd) |
 | Diagnostics | `perf-record start/stop` (perf) |
@@ -34,6 +34,13 @@ from `lib/utils/shell-integration.sh`.
 - `pip-package` and `uv-package` extract a complete JSON payload even when the
   underlying tool prints warning lines around it, and fail clearly if none is
   present.
+- Package discovery and updates retain native failures; failed discovery is not
+  an empty inventory. Python and .NET updates accept registry identifiers only.
+- `uv-tool update NAME` uses `uv tool upgrade`, preserving recorded tool
+  constraints instead of reinstalling the tool.
+- `vscode-ext update [--profile NAME] [--dry-run]` updates one profile in bulk.
+  Omitting the profile selects the default. Profile names are validated before
+  native calls, and preview never invokes `code --update-extensions`.
 
 ## Shell integration
 

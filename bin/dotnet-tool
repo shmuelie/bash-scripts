@@ -4,6 +4,7 @@
 set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/utils/package-validation.sh"
 
 usage() { cat <<'EOF'
 Usage: dotnet-tool <command> [options]
@@ -21,18 +22,24 @@ EOF
 # `dotnet tool list`. Run from $HOME so the local manifest isn't picked up
 # unexpectedly (mirrors Invoke-InLocation ~ in the original).
 parse_tool_list() {
-    local scope="$1"
-    ( cd "$HOME" && dotnet tool list "$scope" 2>/dev/null ) | tail -n +3 | while IFS= read -r line;
+    local scope="$1" raw body
+    raw="$(cd "$HOME" && DOTNET_CLI_UI_LANGUAGE=en-US dotnet tool list "$scope")" || return $?
+    [[ "$raw" == *'Package Id'* && "$raw" == *'---'* ]] ||
+        { log_error 'Invalid dotnet tool list output.'; return 1; }
+    body="$(sed '1,/^---/d' <<< "$raw")"
+    while IFS= read -r line;
     do
         [[ -z "$line" ]] && continue
         # Columns are separated by runs of 2+ spaces.
-        local pkg ver cmds
+        local pkg ver cmds rest
+        [[ "$line" =~ ^[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]] ]] ||
+            { log_error "Invalid dotnet tool row: $line"; return 1; }
         pkg="$(sed -E 's/[[:space:]]{2,}.*//' <<< "$line")"
         rest="$(sed -E 's/^[^[:space:]]+[[:space:]]{2,}//' <<< "$line")"
         ver="$(sed -E 's/[[:space:]]{2,}.*//' <<< "$rest")"
         cmds="$(sed -E 's/^[^[:space:]]+[[:space:]]{2,}//' <<< "$rest")"
         [[ -n "$pkg" ]] && printf '%s\t%s\t%s\n' "$pkg" "$ver" "$cmds"
-    done
+    done <<< "$body"
 }
 
 cmd="${1:-}"; shift || true
@@ -54,10 +61,12 @@ case "$cmd" in
             esac
         done
         rows=()
+        inventory="$(parse_tool_list "$scope")"
         while IFS=$'\t' read -r pkg ver cmds; do
+            [[ -n "$pkg" ]] || continue
             # shellcheck disable=SC2053
             [[ "$pkg" == $pattern ]] && rows+=("$pkg"$'\t'"$ver"$'\t'"$cmds")
-        done < <(parse_tool_list "$scope")
+        done <<< "$inventory"
         if [[ "$json" == "1" ]]; then
             require_cmd jq
             if [[ ${#rows[@]} -eq 0 ]]; then echo '[]'; else
@@ -88,16 +97,19 @@ case "$cmd" in
             case "$a" in
                 --local) scope='--local' ;;
                 --dry-run|--whatif) DRY_RUN=1 ;;
-                *) name="$a" ;;
+                *) [[ -z "$name" ]] || die 'update accepts one name (or piped names).'; name="$a" ;;
             esac
         done
         do_update() {
-            local n="$1"; [[ -n "$n" ]] || return 0
+            local n="$1" result=0
+            package_validate_dotnet "$n" || return 1
             should_process "dotnet tool update $n" || return 0
-            dotnet tool update "$n" "$scope" || log_warn "Failed to update tool: $n"
+            dotnet tool update "$n" "$scope" || result=$?
+            [[ "$result" == 0 ]] || log_warn "Failed to update tool: $n (exit $result)"
+            return "$result"
         }
         if [[ -n "$name" ]]; then do_update "$name"
-        elif [[ ! -t 0 ]]; then while IFS= read -r l; do do_update "$l"; done
+        elif [[ ! -t 0 ]]; then while IFS= read -r l || [[ -n "$l" ]]; do do_update "$l"; done
         else die 'update requires a package id (or piped names).'; fi
         ;;
     uninstall)

@@ -5,6 +5,7 @@ set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
 source "$_SHM_ROOT/lib/utils/json-output.sh"
+source "$_SHM_ROOT/lib/utils/package-validation.sh"
 
 usage() { cat <<'EOF'
 Usage: npm-package <command> [options]
@@ -41,10 +42,19 @@ case "$cmd" in
         require_cmd jq
         if [[ "$outdated" == "1" ]]; then
             args=(outdated --json); [[ "$global" == "1" ]] && args+=(--global)
-            raw="$(npm "${args[@]}" 2>/dev/null || true)"
-            [[ -z "${raw//[[:space:]]/}" ]] && { [[ "$json" == "1" ]] && echo '[]'; exit 0; }
+            native_status=0
+            raw="$(npm "${args[@]}")" || native_status=$?
+            [[ "$native_status" -le 1 ]] || die "$native_status" 'npm outdated failed.'
+            if [[ -z "${raw//[[:space:]]/}" ]]; then
+                [[ "$native_status" == 0 ]] || die 'npm outdated failed without valid update data.'
+                [[ "$json" == "1" ]] && echo '[]'
+                exit 0
+            fi
             raw="$(printf '%s' "$raw" | extract_json_payload)" ||
                 die 'No valid JSON payload found in npm output.'
+            jq -e 'type == "object" and all(.[]; type == "object" and
+                (.current | type == "string") and (.latest | type == "string"))' <<< "$raw" >/dev/null ||
+                die 'Invalid npm outdated inventory.'
             [[ "$raw" == '{}' ]] && { [[ "$json" == "1" ]] && echo '[]'; exit 0; }
             if [[ "$json" == "1" ]]; then
                 printf '%s' "$raw" | jq --argjson g "$([[ $global == 1 ]] && echo true || echo false)" \
@@ -55,9 +65,12 @@ case "$cmd" in
             fi
         else
             args=(list --json --depth=0); [[ "$global" == "1" ]] && args+=(--global)
-            raw="$(npm "${args[@]}" 2>/dev/null || true)"
+            raw="$(npm "${args[@]}")"
             raw="$(printf '%s' "$raw" | extract_json_payload)" ||
                 die 'No valid JSON payload found in npm output.'
+            jq -e 'type == "object" and (has("error") | not) and
+                ((.dependencies // {}) | type == "object" and all(.[]; .version | type == "string"))' \
+                <<< "$raw" >/dev/null || die 'Invalid npm installed inventory.'
             if [[ "$json" == "1" ]]; then
                 printf '%s' "$raw" | jq --argjson g "$([[ $global == 1 ]] && echo true || echo false)" \
                     '(.dependencies // {}) | to_entries | map({name:.key, version:.value.version, global:$g})'
@@ -73,12 +86,12 @@ case "$cmd" in
             case "$a" in
                 --global|-g) global=1 ;;
                 --dry-run|--whatif) DRY_RUN=1 ;;
-                *) name="$a" ;;
+                *) [[ -z "$name" ]] || die 'update accepts one name (or piped names).'; name="$a" ;;
             esac
         done
         do_update() {
             local n="$1"
-            [[ -n "$n" ]] || return 0
+            package_validate_npm "$n" || return 1
             should_process "npm update $n$([[ $global == 1 ]] && echo ' (global)')" || return 0
             if [[ "$global" == "1" ]]; then
                 npm install -g "$n@latest"
@@ -89,7 +102,7 @@ case "$cmd" in
         if [[ -n "$name" ]]; then
             do_update "$name"
         elif [[ ! -t 0 ]]; then
-            while IFS= read -r line; do do_update "$line"; done
+            while IFS= read -r line || [[ -n "$line" ]]; do do_update "$line"; done
         else
             die 'update requires a package name (or piped names).'
         fi

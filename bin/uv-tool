@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# uv-tool — list and install tools managed by uv.
+# uv-tool — manage tools via UvHelpers.ps1 and native uv upgrade semantics.
 set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/utils/package-validation.sh"
 
 usage() { cat <<'EOF'
 Usage: uv-tool <command> [args]
@@ -10,24 +11,30 @@ Usage: uv-tool <command> [args]
 Commands:
   list [name] [--json]       List installed uv tools, optionally by exact name.
   install <name> [--dry-run] Install a tool unless that exact name is installed.
+  update <name> [--dry-run]  Upgrade a tool, retaining its recorded constraints.
 EOF
 }
 
 list_tools() {
     local wanted="$1" line clean name version raw
     local -a rows=()
-    if ! raw="$(uv tool list 2>&1)"; then
-        printf '%s\n' "$raw" >&2
-        return 1
-    fi
+    raw="$(uv tool list)" || return $?
     while IFS= read -r line; do
         clean="$(printf '%s' "$line" | sed $'s/\033\\[[0-9;]*[[:alpha:]]//g')"
-        [[ "$clean" == -* ]] && continue
+        [[ -z "$clean" ]] && continue
+        if [[ "$clean" == '- '* ]]; then
+            [[ -n "${name:-}" ]] || { log_error 'uv tool executable without a tool.'; return 1; }
+            continue
+        fi
         if [[ "$clean" =~ ^([^[:space:]]+)[[:space:]]+v([^[:space:]]+) ]]; then
             name="${BASH_REMATCH[1]}"
             version="${BASH_REMATCH[2]}"
+            package_validate_python "$name" || return 1
             [[ -z "$wanted" || "$name" == "$wanted" ]] &&
                 rows+=("$name"$'\x1f'"$version")
+        else
+            log_error "Unrecognized uv tool list output: $clean"
+            return 1
         fi
     done <<< "$raw"
     printf '%s\n' "${rows[@]:-}"
@@ -74,7 +81,7 @@ case "$cmd" in
             done <<< "$output"
         fi
         ;;
-    install)
+    install|update)
         name=''
         installed=''
         while [[ $# -gt 0 ]]; do
@@ -89,6 +96,12 @@ case "$cmd" in
             esac
         done
         [[ -n "$name" ]] || die 'install requires a tool name.'
+        if [[ "$cmd" == update ]]; then
+            package_validate_python "$name"
+            should_process "uv tool upgrade $name" || exit 0
+            uv tool upgrade "$name"
+            exit $?
+        fi
         if ! installed="$(list_tools "$name")"; then
             exit 1
         fi

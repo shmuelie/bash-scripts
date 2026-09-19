@@ -4,6 +4,7 @@
 set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/utils/package-validation.sh"
 
 usage() { cat <<'EOF'
 Usage: vscode-ext <command> [options]
@@ -15,7 +16,7 @@ Commands:
       Install or update an extension (or a .vsix path).
   uninstall <id> [--dry-run]
       Uninstall an extension.
-  update
+  update [--profile P] [--dry-run]
       Update all extensions (code --update-extensions).
 EOF
 }
@@ -34,7 +35,7 @@ case "$cmd" in
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --category) category="$2"; shift 2 ;;
-                --profile) profile="$2"; shift 2 ;;
+                --profile) [[ $# -ge 2 ]] || die '--profile requires a value.'; profile="$2"; package_validate_profile "$profile"; shift 2 ;;
                 --json) json=1; shift ;;
                 *) pattern="$1"; shift ;;
             esac
@@ -42,6 +43,7 @@ case "$cmd" in
         list_args=(--list-extensions --show-versions)
         [[ -n "$category" ]] && list_args+=(--category "$category")
         [[ -n "$profile" ]] && list_args+=(--profile "$profile")
+        inventory="$(code "${list_args[@]}")"
         rows=()
         while IFS= read -r line; do
             if [[ "$line" =~ ^(.+)\.(.+)@(.+)$ ]]; then
@@ -51,8 +53,10 @@ case "$cmd" in
                 if [[ "$full" == $pattern || "$nm" == $pattern ]]; then
                     rows+=("$pub"$'\t'"$nm"$'\t'"$full"$'\t'"$ver")
                 fi
+            elif [[ -n "$line" ]]; then
+                die "Invalid VS Code extension inventory row: $line"
             fi
-        done < <(code "${list_args[@]}" 2>/dev/null)
+        done <<< "$inventory"
         if [[ "$json" == "1" ]]; then
             require_cmd jq
             if [[ ${#rows[@]} -eq 0 ]]; then echo '[]'; else
@@ -74,7 +78,7 @@ case "$cmd" in
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --pre-release) install_args+=(--pre-release); shift ;;
-                --profile) install_args+=(--profile "$2"); shift 2 ;;
+                --profile) [[ $# -ge 2 ]] || die '--profile requires a value.'; package_validate_profile "$2"; install_args+=(--profile "$2"); shift 2 ;;
                 --dry-run|--whatif) DRY_RUN=1; shift ;;
                 *) die "Unknown option: $1" ;;
             esac
@@ -89,8 +93,16 @@ case "$cmd" in
         code --uninstall-extension "$id"
         ;;
     update)
-        should_process "code --update-extensions" || exit 0
-        code --update-extensions
+        update_args=(--update-extensions)
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --profile) [[ $# -ge 2 ]] || die '--profile requires a value.'; package_validate_profile "$2"; update_args+=(--profile "$2"); shift 2 ;;
+                --dry-run|--whatif) DRY_RUN=1; shift ;;
+                *) die "Unknown option: $1" ;;
+            esac
+        done
+        should_process "code ${update_args[*]}" || exit 0
+        code "${update_args[@]}"
         ;;
     *) die "Unknown command: $cmd (see --help)" ;;
 esac

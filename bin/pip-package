@@ -5,6 +5,7 @@ set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
 source "$_SHM_ROOT/lib/utils/json-output.sh"
+source "$_SHM_ROOT/lib/utils/package-validation.sh"
 
 usage() { cat <<'EOF'
 Usage: pip-package <command> [options]
@@ -50,6 +51,7 @@ case "$cmd" in
         raw="$(pip "${args[@]}")"
         out="$(printf '%s' "$raw" | extract_json_payload)" ||
             die 'No valid JSON payload found in pip output.'
+        package_validate_inventory <<< "$out"
         if [[ "$json" == "1" ]]; then
             printf '%s\n' "$out"
         else
@@ -61,16 +63,19 @@ case "$cmd" in
         for a in "$@"; do
             case "$a" in
                 --dry-run|--whatif) DRY_RUN=1 ;;
-                *) name="$a" ;;
+                *) [[ -z "$name" ]] || die 'update accepts one name (or piped names).'; name="$a" ;;
             esac
         done
         do_update() {
-            local n="$1"; [[ -n "$n" ]] || return 0
+            local n="$1" result=0
+            package_validate_python "$n" || return 1
             should_process "pip install --upgrade $n" || return 0
-            pip install --upgrade "$n" || log_warn "Failed to update: $n"
+            pip install --upgrade "$n" || result=$?
+            [[ "$result" == 0 ]] || log_warn "Failed to update: $n (exit $result)"
+            return "$result"
         }
         if [[ -n "$name" ]]; then do_update "$name"
-        elif [[ ! -t 0 ]]; then while IFS= read -r l; do do_update "$l"; done
+        elif [[ ! -t 0 ]]; then while IFS= read -r l || [[ -n "$l" ]]; do do_update "$l"; done
         else die 'update requires a package name (or piped names).'; fi
         ;;
     *) die "Unknown command: $cmd (see --help)" ;;

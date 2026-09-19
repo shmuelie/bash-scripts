@@ -47,6 +47,11 @@ node-alias set default 22.11.0
 
 `npm-package list` tolerates warning text before or after npm's JSON payload and
 fails clearly when no complete JSON object or array is present.
+Outdated discovery accepts npm's expected exit 1 only with valid inventory;
+fatal discovery errors retain their native status. Updates accept ASCII registry
+identifiers of at most 214 characters, including `@scope/name`, not paths,
+versions, tags, URLs, or options. Validation applies per streamed record and
+before preview; earlier valid records may already have been updated.
 
 ## Requirements
 
