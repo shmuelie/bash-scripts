@@ -20,7 +20,7 @@ while [[ $# -gt 0 ]]; do
         --) args+=("$1"); saw_ddash=1; shift ;;
         --passthru) passthru=1; shift ;;
         --dry-run|--whatif) DRY_RUN=1; shift ;;
-        --resume-session|--usage-output-file|--enable-mcp-server|--disable-mcp-server|--name|--session-id|--model|--reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format|-C|--change-dir)
+        --selector|--resume-session|--usage-output-file|--enable-mcp-server|--disable-mcp-server|--name|--session-id|--model|--reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format|-C|--change-dir)
             args+=("$1")
             shift
             if [[ $# -gt 0 ]]; then args+=("$1"); shift; fi

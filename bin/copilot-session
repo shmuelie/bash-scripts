@@ -6,6 +6,7 @@ set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
 source "$_SHM_ROOT/lib/copilot/copilot-common.sh"
+source "$_SHM_ROOT/lib/copilot/session-selector.sh"
 
 usage() { cat <<'EOF'
 Usage: copilot-session <command> [args]
@@ -28,6 +29,7 @@ Shared filters (AND, case-insensitive globs against recorded metadata):
 
 Select options (global discovery; limit applies after filtering):
   --id <glob> --first <n>
+  --selector <executable>   JSON candidates on stdin; id or new/cancel on stdout.
   --stay-in-directory --dry-run/--whatif
 EOF
 }
@@ -63,13 +65,7 @@ case "$cmd" in
         sessions_out="$(copilot_sessions "${filters[@]}")" || exit 1
         if [[ "$json" == "1" ]]; then
             require_cmd jq
-            if [[ -z "$sessions_out" ]]; then echo '[]'; else
-                printf '%s\n' "$sessions_out" | jq -R -s 'def nz: if .=="" then null else . end;
-                    split("\n") | map(select(length>0) | split("\u001f") |
-                    {id:.[0], name:.[1], cwd:(.[2]|nz), branch:(.[3]|nz),
-                     repository:(.[4]|nz), createdAt:(.[5]|nz), updatedAt:(.[6]|nz),
-                     eventCount:(.[7]|tonumber), eventSize:(.[8]|tonumber), path:.[9]})'
-            fi
+            printf '%s\n' "$sessions_out" | copilot_rows_json
         else
             printf '%-38s %-10s %-8s %s\n' 'ID' 'EVENTS' 'SIZE' 'NAME'
             # shellcheck disable=SC2034  # unpacking a fixed row; not all fields printed
@@ -81,7 +77,7 @@ case "$cmd" in
         ;;
     select)
         filters=(--all); first=0
-        stay=0; prompt=''; rest=()
+        stay=0; prompt=''; rest=(); selector=''
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --id|--repository|--branch|--cwd|--summary|--updated-before|--older-than|--first)
@@ -97,6 +93,9 @@ case "$cmd" in
                     esac
                     shift 2 ;;
                 --stay-in-directory) stay=1; shift ;;
+                --selector)
+                    [[ $# -ge 2 && -n "$2" ]] || die '--selector requires an executable.'
+                    selector="$2"; shift 2 ;;
                 --dry-run|--whatif) DRY_RUN=1; shift ;;
                 --) shift; rest+=("$@"); break ;;
                 -*) die "Unknown select option: $1" ;;
@@ -123,7 +122,13 @@ case "$cmd" in
         fi
 
         selected=0
-        if [[ ${#rows[@]} -gt 1 ]]; then
+        if [[ -n "$selector" && "${DRY_RUN:-0}" != "1" ]]; then
+            chosen="$(copilot_select_callback "$selector" rows)" || exit $?
+            selected=-1
+            for i in "${!rows[@]}"; do
+                [[ "${rows[$i]%%"$SHM_FS"*}" != "$chosen" ]] || selected="$i"
+            done
+        elif [[ ${#rows[@]} -gt 1 ]]; then
             labels=()
             for i in "${!rows[@]}"; do
                 IFS="$SHM_FS" read -r id name s_cwd branch repo created updated ecount esize path <<<"${rows[$i]}"
@@ -138,21 +143,25 @@ case "$cmd" in
             selected=$((choice_index - 1))
         fi
 
-        IFS="$SHM_FS" read -r id name s_cwd branch repo created updated ecount esize path <<<"${rows[$selected]}"
-        copilot_resolve_session_dir "$id" >/dev/null ||
-            die "Session '$id' is no longer available."
         launch_cwd="$(pwd -P)"
-        if [[ "$stay" == "0" ]]; then
-            [[ -n "$s_cwd" ]] || die "Session '$id' has no recorded working directory."
-            [[ -d "$s_cwd" ]] ||
-                die "Recorded working directory for session '$id' does not exist: $s_cwd"
-            launch_cwd="$s_cwd"
+        cargs=(--allow-all --experimental)
+        description='Start a new Copilot session'
+        if [[ "$selected" -ge 0 ]]; then
+            IFS="$SHM_FS" read -r id name s_cwd branch repo created updated ecount esize path <<<"${rows[$selected]}"
+            copilot_resolve_session_dir "$id" >/dev/null ||
+                die "Session '$id' is no longer available."
+            if [[ "$stay" == "0" ]]; then
+                [[ -n "$s_cwd" ]] || die "Session '$id' has no recorded working directory."
+                [[ -d "$s_cwd" ]] ||
+                    die "Recorded working directory for session '$id' does not exist: $s_cwd"
+                launch_cwd="$s_cwd"
+            fi
+            cargs+=(--resume "$id")
+            description="Resume Copilot session $id"
         fi
-
-        cargs=(--allow-all --experimental --resume "$id")
         [[ -n "$prompt" ]] && cargs+=(--autopilot -p "$prompt")
         [[ ${#rest[@]} -gt 0 ]] && cargs+=("${rest[@]}")
-        if ! should_process "Resume Copilot session $id from $launch_cwd"; then exit 0; fi
+        if ! should_process "$description from $launch_cwd"; then exit 0; fi
         exe="$(resolve_copilot)"
         cd -- "$launch_cwd"
         exec "$exe" "${cargs[@]}"

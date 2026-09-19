@@ -13,6 +13,8 @@ if [[ -n "${_SHM_COPILOT_LAUNCHPLAN_SOURCED:-}" ]]; then
 fi
 _SHM_COPILOT_LAUNCHPLAN_SOURCED=1
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/session-selector.sh"
+
 # Auto-generated maintenance session names to skip when auto-resuming.
 # Ported verbatim from Get-CopilotLaunchPlan.ps1.
 _SHM_IGNORED_SESSION_NAMES=(
@@ -53,6 +55,7 @@ Resume control:
   --no-auto-resume         Force the session picker whenever any session exists.
   --include-unnamed        Include unnamed '(no summary)' sessions in the picker.
   --defer-resume           Emit no --resume and skip the picker (for overlays).
+  --selector <executable>  Replace only the picker using the JSON selector protocol.
 
 Defaults (each disablable):
   --no-allow-all           Do not pass --allow-all.
@@ -89,61 +92,69 @@ _shm_is_ignored_name() {
 # _shm_resolve_resume — decide which session to resume and echo its id (or nothing).
 # Uses the parsed resume flags in the caller's scope.
 _shm_resolve_resume() {
-    local resume_latest="$1" show_picker="$2" include_unnamed="$3"
+    local resume_latest="$1" show_picker="$2" include_unnamed="$3" selector="$4"
     local cwd branch
     cwd="$(pwd -P)"
     branch="$(copilot_current_branch)"
 
     # Collect cwd-filtered sessions (newest first), dropping ignored/undated ones.
-    local ids=() names=() branches=()
+    local ids=() names=() branches=() candidate_rows=() sessions_out
+    sessions_out="$(copilot_sessions)" || return 1
     local id display s_cwd s_branch s_repo created updated ecount esize path
     # shellcheck disable=SC2034  # unpacking a fixed row; not all fields used here
     while IFS="$SHM_FS" read -r id display s_cwd s_branch s_repo created updated ecount esize path; do
         [[ -z "$updated" ]] && continue
         _shm_is_ignored_name "$display" && continue
         ids+=("$id"); names+=("$display"); branches+=("$s_branch")
-    done < <(copilot_sessions)
+        candidate_rows+=("$id$SHM_FS$display$SHM_FS$s_cwd$SHM_FS$s_branch$SHM_FS$s_repo$SHM_FS$created$SHM_FS$updated$SHM_FS$ecount$SHM_FS$esize$SHM_FS$path")
+    done <<<"$sessions_out"
 
     local count=${#ids[@]}
     [[ "$count" -eq 0 ]] && return 0
 
     # Prefer sessions matching the current git branch, if any match.
     if [[ -n "$branch" ]]; then
-        local m_ids=() m_names=() m_branches=() i
+        local m_ids=() m_names=() m_branches=() m_rows=() i
         for i in "${!ids[@]}"; do
             if [[ "${branches[$i]}" == "$branch" ]]; then
                 m_ids+=("${ids[$i]}"); m_names+=("${names[$i]}"); m_branches+=("${branches[$i]}")
+                m_rows+=("${candidate_rows[$i]}")
             fi
         done
         if [[ ${#m_ids[@]} -gt 0 ]]; then
             ids=("${m_ids[@]}"); names=("${m_names[@]}"); branches=("${m_branches[@]}")
+            candidate_rows=("${m_rows[@]}")
         fi
     fi
     count=${#ids[@]}
 
     # Named sessions: real display name (not blank, not the placeholder).
-    local named_ids=() named_names=() i
+    local named_ids=() named_names=() named_rows=() i
     for i in "${!ids[@]}"; do
         local nm="${names[$i]}"
         if [[ -n "${nm// /}" && "$nm" != '(no summary)' ]]; then
             named_ids+=("${ids[$i]}"); named_names+=("$nm")
+            named_rows+=("${candidate_rows[$i]}")
         fi
     done
 
     # Picker candidate set: hide unnamed stubs when named sessions exist.
     # shellcheck disable=SC2034  # populated for nameref use by _shm_session_picker
-    local pick_ids=() pick_names=()
+    local pick_ids=() pick_names=() pick_rows=()
     if [[ "$include_unnamed" == "0" && ${#named_ids[@]} -gt 0 ]]; then
         pick_ids=("${named_ids[@]}"); pick_names=("${named_names[@]}")
+        pick_rows=("${named_rows[@]}")
     else
         # shellcheck disable=SC2034
         pick_ids=("${ids[@]}")
         # shellcheck disable=SC2034
         pick_names=("${names[@]}")
+        # shellcheck disable=SC2034  # consumed through the selector's nameref
+        pick_rows=("${candidate_rows[@]}")
     fi
 
     if [[ "$show_picker" == "1" && "$count" -ge 1 ]]; then
-        _shm_session_picker pick_ids pick_names
+        _shm_session_picker pick_ids pick_names pick_rows "$selector"
     elif [[ "$count" -eq 1 ]]; then
         printf '%s\n' "${ids[0]}"
     elif [[ "$count" -gt 1 && "$resume_latest" == "1" ]]; then
@@ -151,13 +162,17 @@ _shm_resolve_resume() {
     elif [[ "$count" -gt 1 && ${#named_ids[@]} -eq 1 ]]; then
         printf '%s\n' "${named_ids[0]}"
     elif [[ "$count" -gt 1 ]]; then
-        _shm_session_picker pick_ids pick_names
+        _shm_session_picker pick_ids pick_names pick_rows "$selector"
     fi
 }
 
 # _shm_session_picker IDS_ARRAY NAMES_ARRAY — show a picker and echo the chosen id
 # (empty for "New session"). Uses fzf/select via pick_one on labels.
 _shm_session_picker() {
+    if [[ -n "$4" ]]; then
+        copilot_select_callback "$4" "$3"
+        return $?
+    fi
     local -n _ids="$1"; local -n _names="$2"
     local labels=() i
     for i in "${!_ids[@]}"; do
@@ -165,7 +180,10 @@ _shm_session_picker() {
     done
     labels+=("N) New session")
     local choice
-    choice="$(printf '%s\n' "${labels[@]}" | pick_one 'Session')" || return 0
+    choice="$(printf '%s\n' "${labels[@]}" | pick_one 'Session')" || {
+        log_error 'No Copilot session selected.'
+        return 1
+    }
     [[ -z "$choice" || "$choice" == 'N) New session' ]] && return 0
     # Map the chosen label back to its index.
     for i in "${!labels[@]}"; do
@@ -185,7 +203,7 @@ build_launch_plan() {
     # shellcheck disable=SC2034
     COPILOT_PASSTHROUGH=0
 
-    local prompt='' name=''
+    local prompt='' name='' selector=''
     local no_resume=0 resume_latest=0 resume_session='' show_picker=0 include_unnamed=0 defer_resume=0
     local session_id_present=0
     local no_allow_all=0 no_experimental=0 no_deny=0
@@ -205,6 +223,9 @@ build_launch_plan() {
             --no-auto-resume|--show-picker) show_picker=1; shift ;;
             --include-unnamed) include_unnamed=1; shift ;;
             --defer-resume) defer_resume=1; shift ;;
+            --selector)
+                [[ $# -ge 2 && -n "$2" ]] || die '--selector requires an executable.'
+                selector="$2"; shift 2 ;;
             --no-allow-all) no_allow_all=1; shift ;;
             --no-experimental) no_experimental=1; shift ;;
             --no-default-deny-tools) no_deny=1; shift ;;
@@ -287,7 +308,7 @@ build_launch_plan() {
         COPILOT_ARGS+=(--resume "$resume_session"); resumed=1
     elif [[ "$no_resume" == "0" && "$defer_resume" == "0" && "$session_id_present" == "0" ]]; then
         local chosen
-        chosen="$(_shm_resolve_resume "$resume_latest" "$show_picker" "$include_unnamed")"
+        chosen="$(_shm_resolve_resume "$resume_latest" "$show_picker" "$include_unnamed" "$selector")" || return $?
         if [[ -n "$chosen" ]]; then
             log_verbose "Resuming session: $chosen"
             COPILOT_ARGS+=(--resume "$chosen"); resumed=1

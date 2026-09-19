@@ -129,6 +129,51 @@ copilot-session select --dry-run --first 1
 Multiple matches use the configured fzf/console picker. Dry-run requires the
 filters or `--first 1` to resolve exactly one session and never opens a picker.
 
+### Replaceable session picker
+
+`start-copilot`, `copilot-launch-plan`, and `copilot-session select` accept
+`--selector <executable>` (a single executable path or PATH command, not a shell
+command string). It receives a JSON array on stdin with the same original
+session objects as `copilot-session list --json`: `id`, displayed `name`, `cwd`,
+`branch`, `repository`, `createdAt`, `updatedAt`, `eventCount`, `eventSize`, and
+`path`. Missing metadata is `null`. Diagnostics belong on stderr; stdout must
+contain exactly one JSON object:
+
+| Result | Meaning |
+|---|---|
+| `{"id":"candidate-id"}` | Resume that exact original candidate. |
+| `{"action":"new"}` | Start a new session (in the current directory). |
+| `{"action":"cancel"}` | Abort with status 130, without launching. |
+
+Returned metadata is never trusted: only the ID is used, and it must belong to
+the original candidate set. Invalid output, unknown IDs, and executable failures
+are errors with no automatic fallback. Selectors work without a console and
+introduce no UI dependency. The default fzf/console picker remains available;
+an unavailable console or failed picker aborts instead of silently launching.
+
+Launchers call the selector **only when existing resume policy needs a picker**:
+folder/branch preference, ignored names, unnamed filtering, automatic single
+session and lone named-session resume, `--resume-latest`, explicit resume,
+`--session-id`, `--no-resume`, and `--defer-resume` still apply. Selection changes
+only resume, not model, MCP, deny-tool, or passthrough arguments.
+Global `select` calls a supplied selector even for one candidate, after shared
+filtering and `--first`. With no candidates the launcher starts new, while
+global `select` reports no matches; neither invokes the callback. Dry-run never
+invokes any selector.
+
+For example, an executable `choose-session` can select the newest already
+filtered candidate without interpreting shell code:
+
+```bash
+#!/usr/bin/env bash
+jq 'if length > 0 then {id: .[0].id} else {action: "new"} end'
+```
+
+```bash
+copilot-session select --summary '*cleanup*' --older-than 7d --selector ./choose-session
+start-copilot --no-auto-resume --selector ./choose-session --model fast
+```
+
 ## Directory changes
 
 `start-copilot` runs in place. `copilot-session resume` execs `copilot`
