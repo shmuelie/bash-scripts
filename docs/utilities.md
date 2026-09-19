@@ -12,6 +12,7 @@ from `lib/utils/shell-integration.sh`.
 | Core | `is-elevated`, `in-location`, `repair-global-json`, `reset-terminal`, `format-duration` |
 | Shell integration (sourced) | `shm_global_constant`, `shm_path_constant`, `shm_prepend_path`, `shm_session_title`, `shm_source_safe` |
 | .NET tools | `dotnet-tool list/install/update/uninstall` |
+| Aggregate updates | [`package-update`](packages.md) |
 | Python | `pip-package list/update`, `uv-package list/update`, `uv-tool list/install/update` |
 | VS Code | `start-vscode`, `vscode-chat`, `vscode-ext list/install/uninstall/update` |
 | Services | `service-process` (systemd) |

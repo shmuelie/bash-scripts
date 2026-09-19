@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# package-update -- aggregate updates, ported from Shmuelie.PackageManagement.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/utils/package-validation.sh"
+source "$_SHM_ROOT/lib/packages/core.sh"
+source "$_SHM_ROOT/lib/packages/providers.sh"
+source "$_SHM_ROOT/lib/packages/psresource.sh"
+
+usage() {
+    cat <<'EOF'
+Usage: package-update [--provider NAME] [--exclude-provider NAME] [options]
+
+Providers: npm, pip, dotnet, uv, vscode, psresource
+  Default: all integrations (unavailable integrations are reported as skipped).
+  Repeat --provider or --exclude-provider to select several providers.
+  --options JSON       Provider options; see docs/packages.md.
+  --dry-run, --whatif  Read-only discovery; no update calls.
+  --confirm            Ask on the terminal for each target (fail if unavailable).
+  --stop-on-failure    Stop after the first failed provider or target.
+  --json               Emit a structured result array, including on failure.
+EOF
+}
+
+includes=(); excludes=(); provider_options='{}'
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --provider|--exclude-provider|--options)
+            [[ $# -ge 2 && -n "$2" ]] || die "$1 requires a value."
+            case "$1" in
+                --provider) includes+=("$2") ;;
+                --exclude-provider) excludes+=("$2") ;;
+                --options) provider_options="$2" ;;
+            esac
+            shift 2 ;;
+        --confirm) PACKAGES_CONFIRM=1; shift ;;
+        --stop-on-failure) PACKAGES_STOP_ON_FAILURE=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) parse_common_flag "$1" || die "Unknown option: $1"; shift ;;
+    esac
+done
+require_cmd jq
+jq -e -f "$_SHM_ROOT/lib/packages/options.jq" <<< "$provider_options" >/dev/null ||
+    die 'Invalid provider options (see docs/packages.md).'
+while IFS= read -r profile; do
+    package_validate_profile "$profile"
+done < <(jq -r '.vscode.profiles // [] | .[]' <<< "$provider_options")
+
+for provider in "${includes[@]}" "${excludes[@]}"; do
+    [[ -n "${PACKAGES_AVAILABLE[$provider]:-}" ]] || die "Unknown provider: $provider"
+done
+selected=()
+for provider in "${PACKAGES_PROVIDERS[@]}"; do
+    include=0
+    [[ ${#includes[@]} -ne 0 ]] || include=1
+    for name in "${includes[@]}"; do [[ "$name" != "$provider" ]] || include=1; done
+    for name in "${excludes[@]}"; do [[ "$name" != "$provider" ]] || include=0; done
+    [[ "$include" == 0 ]] || selected+=("$provider")
+done
+result=0
+rows="$(packages_run "$provider_options" "${selected[@]}")" || result=$?
+if [[ "$JSON" == 1 ]]; then
+    jq -s . <<< "$rows"
+else
+    jq -rs '.[] | [.provider,.target,.status,(.reason // .error // "")] | @tsv' <<< "$rows"
+fi
+exit "$result"
