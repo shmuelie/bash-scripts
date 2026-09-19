@@ -18,13 +18,14 @@ Options:
   --github-account <host/owner=account>
                                     Forward account mapping (repeatable).
   --no-github-account-resolve       Disable account-aware fetch.
+  --changed-only                    Show Updated, Removed, Failed and StashFailed.
   --json                            Emit JSON.
   --dry-run, --whatif               Preview without merging.
   -v, --verbose                     Verbose output.
 EOF
 }
 
-check_remote=0; repo_arg=''; no_account_resolve=0; github_accounts=()
+check_remote=0; repo_arg=''; no_account_resolve=0; github_accounts=(); changed_only=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
@@ -32,6 +33,7 @@ while [[ $# -gt 0 ]]; do
         --check-remote) check_remote=1; shift ;;
         --github-account) github_accounts+=("$2"); shift 2 ;;
         --no-github-account-resolve) no_account_resolve=1; shift ;;
+        --changed-only) changed_only=1; shift ;;
         --json) JSON=1; shift ;;
         --dry-run|--whatif) DRY_RUN=1; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
@@ -173,9 +175,21 @@ if [[ ${#behind_list[@]} -gt 0 ]] &&
     done
 fi
 
+display_results=("${results[@]}")
+if [[ "$changed_only" == 1 ]]; then
+    display_results=()
+    for row in "${results[@]}"; do
+        IFS="$SHM_FS" read -r br wt_path st _ <<< "$row"
+        case "$st" in
+            Updated|Removed|Failed|StashFailed) display_results+=("$row") ;;
+            Missing) log_error "Worktree '$br' is missing at '$wt_path'." ;;
+        esac
+    done
+fi
+
 if [[ "$JSON" == "1" ]]; then
-    if [[ ${#results[@]} -eq 0 ]]; then echo '[]'; else
-        printf '%s\n' "${results[@]}" | jq -R -s --arg fs "$SHM_FS" '
+    if [[ ${#display_results[@]} -eq 0 ]]; then echo '[]'; else
+        printf '%s\n' "${display_results[@]}" | jq -R -s --arg fs "$SHM_FS" '
             def nz: if .=="" then null else . end;
             split("\n") | map(select(length>0) | split($fs) |
             {branch:(.[0]|nz), path:.[1], status:.[2],
@@ -183,7 +197,7 @@ if [[ "$JSON" == "1" ]]; then
     fi
 else
     printf '%-32s %-12s %-7s %-42s %s\n' 'BRANCH' 'STATUS' 'BEHIND' 'PATH' 'OPERATION'
-    for row in "${results[@]}"; do
+    for row in "${display_results[@]}"; do
         IFS="$SHM_FS" read -r br wt_path st bh op _ <<< "$row"
         printf '%-32s %-12s %-7s %-42s %s\n' "$br" "$st" "$bh" "$wt_path" "$op"
     done

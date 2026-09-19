@@ -490,3 +490,206 @@ EOF
     [[ "$output" == *"unmerged index entries"* ]]
     [ "$(git -C "$repo" ls-files --unmerged)" = "$before" ]
 }
+
+@test "worktree removal now deletes even unmerged local branches by default" {
+    make_remote
+    git -C "$repo" worktree add -qb feature "$WORK/feature"
+    printf 'unmerged\n' > "$WORK/feature/new"
+    git -C "$WORK/feature" add .
+    git -C "$WORK/feature" commit -qm unmerged
+    git -C "$repo" push -q origin feature
+    run git-worktree-remove -C "$repo" --path "$WORK/feature"
+    [ "$status" -eq 0 ]
+    [ ! -e "$WORK/feature" ]
+    ! git -C "$repo" show-ref --verify --quiet refs/heads/feature
+    git --git-dir="$WORK/remote.git" show-ref --verify --quiet refs/heads/feature
+}
+
+@test "worktree removal keep-branch and every legacy false spelling retain branches" {
+    options=(--keep-branch --delete-branch=false --delete-branch:0)
+    for i in "${!options[@]}"; do
+        git -C "$repo" worktree add -qb "feature$i" "$WORK/feature$i"
+        run git-worktree-remove -C "$repo" "${options[$i]}" "feature$i"
+        [ "$status" -eq 0 ]
+        [ ! -e "$WORK/feature$i" ]
+        git -C "$repo" show-ref --verify --quiet "refs/heads/feature$i"
+    done
+    git -C "$repo" worktree add -qb separated "$WORK/separated"
+    run git-worktree-remove -C "$repo" --delete-branch false separated
+    [ "$status" -eq 0 ]
+    git -C "$repo" show-ref --verify --quiet refs/heads/separated
+    git -C "$repo" worktree add -qb legacy "$WORK/legacy"
+    run git-worktree-remove -C "$repo" --delete-branch=true legacy
+    [ "$status" -eq 0 ]
+    ! git -C "$repo" show-ref --verify --quiet refs/heads/legacy
+}
+
+@test "worktree removal and deletion preview and confirm as separate gates" {
+    git -C "$repo" worktree add -qb feature "$WORK/feature"
+    run git-worktree-remove -C "$repo" --dry-run feature
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'What if: Remove worktree'* ]]
+    [[ "$output" == *"What if: Delete local branch 'feature'"* ]]
+    [ -e "$WORK/feature/.git" ]
+    run bash -c 'printf "n\ny\n" | git-worktree-remove -C "$1" --confirm feature' _ "$repo"
+    [ "$status" -eq 0 ]
+    [ -e "$WORK/feature/.git" ]
+    git -C "$repo" show-ref --verify --quiet refs/heads/feature
+    [[ "$output" != *"Delete local branch"* ]]
+    run bash -c 'printf "y\nn\n" | git-worktree-remove -C "$1" --confirm feature' _ "$repo"
+    [ "$status" -eq 0 ]
+    [ ! -e "$WORK/feature" ]
+    git -C "$repo" show-ref --verify --quiet refs/heads/feature
+    git -C "$repo" worktree add -q "$WORK/feature" feature
+    run bash -c 'printf "y\ny\n" | git-worktree-remove -C "$1" --confirm feature' _ "$repo"
+    [ "$status" -eq 0 ]
+    ! git -C "$repo" show-ref --verify --quiet refs/heads/feature
+}
+
+@test "worktree removal failures retain branches without force escalation or retry" {
+    git -C "$repo" worktree add -qb feature "$WORK/feature"
+    printf 'dirty\n' > "$WORK/feature/file"
+    run git-worktree-remove -C "$repo" feature
+    [ "$status" -ne 0 ]
+    git -C "$repo" show-ref --verify --quiet refs/heads/feature
+    [ -d "$WORK/feature" ]
+    git -C "$repo" worktree lock "$WORK/feature"
+    run git-worktree-remove -C "$repo" --force feature
+    [ "$status" -ne 0 ]
+    git -C "$repo" show-ref --verify --quiet refs/heads/feature
+    [ -d "$WORK/feature" ]
+    git -C "$repo" worktree unlock "$WORK/feature"
+    run git-worktree-remove -C "$repo" --force feature
+    [ "$status" -eq 0 ]
+    ! git -C "$repo" show-ref --verify --quiet refs/heads/feature
+}
+
+@test "detached worktree removal never previews or performs branch deletion" {
+    git -C "$repo" worktree add -q --detach "$WORK/detached"
+    before="$(git -C "$repo" for-each-ref refs/heads)"
+    run git-worktree-remove -C "$repo" --path "$WORK/detached" --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" != *'Delete local branch'* ]]
+    run git-worktree-remove -C "$repo" --path "$WORK/detached"
+    [ "$status" -eq 0 ]
+    [ ! -e "$WORK/detached" ]
+    [ "$(git -C "$repo" for-each-ref refs/heads)" = "$before" ]
+}
+
+make_update_fixture() {
+    make_remote
+    local branch next
+    for branch in updated failed stashfailed missing inprogress removed skipped; do
+        git -C "$repo" branch "$branch"
+        git -C "$repo" push -qu origin "$branch"
+        git -C "$repo" worktree add -q "$WORK/$branch" "$branch"
+    done
+    git -C "$repo" worktree add -qb noupstream "$WORK/noupstream"
+    next="$(printf 'advance\n' | git --git-dir="$WORK/remote.git" commit-tree 'main^{tree}' -p main)"
+    for branch in updated failed stashfailed missing inprogress; do
+        git --git-dir="$WORK/remote.git" update-ref "refs/heads/$branch" "$next"
+    done
+    git -C "$repo" push -q origin --delete removed
+    printf 'local\n' > "$WORK/skipped/new"
+    git -C "$WORK/skipped" add .
+    git -C "$WORK/skipped" commit -qm local
+    printf '%s\n' "$next" > "$(git -C "$WORK/inprogress" rev-parse --absolute-git-dir)/MERGE_HEAD"
+    printf 'dirty\n' >> "$WORK/stashfailed/file"
+    rm -rf -- "$WORK/missing"
+    mkdir "$WORK/stubs"
+    cat > "$WORK/stubs/git" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+    *"/failed merge --ff-only "*) echo 'merge failed' >&2; exit 42 ;;
+    *"/stashfailed stash push "*) echo 'stash failed' >&2; exit 43 ;;
+esac
+exec "$REAL_GIT" "$@"
+EOF
+    chmod +x "$WORK/stubs/git"
+}
+
+@test "single updater defaults to all statuses and changed-only preserves actionable failures" {
+    make_update_fixture
+    run env PATH="$WORK/stubs:$PATH" git-worktree-update -C "$repo" --json
+    [ "$status" -ne 0 ]
+    json_is 'map(.status)|sort == ["Current","Failed","InProgress","Missing","NoUpstream","Removed","Skipped","StashFailed","Updated"]'
+    # The synthetic update has an identical tree; rewind only its disposable ref.
+    git -C "$WORK/updated" update-ref refs/heads/updated HEAD~1
+    run bash -c 'PATH="$1:$PATH" git-worktree-update -C "$2" --changed-only --json 2>"$3"' \
+        _ "$WORK/stubs" "$repo" "$WORK/errors"
+    [ "$status" -ne 0 ]
+    json_is 'map(.status)|sort == ["Failed","Removed","StashFailed","Updated"]'
+    grep -q "missing.*$WORK/missing" "$WORK/errors"
+    git -C "$WORK/updated" update-ref refs/heads/updated HEAD~1
+    run env PATH="$WORK/stubs:$PATH" git-worktree-update -C "$repo" --changed-only
+    [ "$status" -ne 0 ]
+    [[ "$output" == *Updated* && "$output" == *Failed* && "$output" == *StashFailed* && "$output" == *Removed* ]]
+    [[ "$output" != *Current* && "$output" != *NoUpstream* && "$output" != *InProgress* ]]
+}
+
+@test "single updater changed-only previews remain visible without changing eligibility or data" {
+    make_update_fixture
+    git -C "$repo" fetch -q --prune origin
+    before="$(git -C "$WORK/updated" rev-parse HEAD)"
+    run bash -c 'PATH="$1:$PATH" git-worktree-update -C "$2" --changed-only --dry-run --json 2>"$3"' \
+        _ "$WORK/stubs" "$repo" "$WORK/preview"
+    [ "$status" -eq 0 ]
+    json_is 'map(.status)==["Removed"]'
+    grep -q 'What if: Fast-forward' "$WORK/preview"
+    [ "$(git -C "$WORK/updated" rev-parse HEAD)" = "$before" ]
+    grep -q dirty "$WORK/stashfailed/file"
+}
+
+@test "single updater changed-only does not conceal failed fetch diagnostics" {
+    git -C "$repo" remote add broken "$WORK/missing-remote.git"
+    run git-worktree-update -C "$repo" --changed-only --json
+    [ "$status" -ne 0 ]
+    [[ "$output" == *'Failed to fetch remotes'* ]]
+    [[ "$output" != '[]' ]]
+}
+
+@test "changed-worktree display preserves every field at 80 100 120 and 160 columns" {
+    fixture="$(jq -n '
+        [{organization:"short",repository:"ok",branch:null,status:"Updated",behindBy:1,path:"/short",error:null},
+         {organization:("org"+("O"*180)),repository:("repo"+("R"*220)),
+          branch:("feature/"+("B"*240)),status:"StashFailed",behindBy:123456789012,
+          path:("/long/"+("P"*350)),error:("First diagnostic "+("E"*210)+"\n\nFinal recovery: restore the saved stash explicitly.")}]')"
+    for width in 80 100 120 160; do
+        run bash -c 'source "$1/lib/git/git-display.sh"; COLUMNS="$2" git_display_changed_worktrees' \
+            _ "$REPO_ROOT" "$width" <<< "$fixture"
+        [ "$status" -eq 0 ]
+        printf '%s\n' "$output" | awk -v width="$width" 'length($0)>width {exit 1}'
+        [[ "$output" == *'Status: Updated (behind: 1)'* ]]
+        [[ "$output" == *'Status: StashFailed (behind: 123456789012)'* ]]
+        [ "$(printf '%s\n' "$output" | grep -c '^Error:')" -eq 1 ]
+        for field in organization repository branch path error; do
+            label="${field^}:"
+            expected="$(jq -r --arg field "$field" '.[1][$field] | gsub("\n";"")' <<< "$fixture")"
+            actual="$(printf '%s\n' "$output" | awk -v label="$label" '
+                $0 ~ "^[A-Z][a-z]+:" {active=0}
+                index($0,label)==1 {if (++count==2 || label=="Error:") {active=1; sub("^[^:]*: ?",""); printf "%s",$0}; next}
+                active && /^ +/ {printf "%s",substr($0,length(label)+2)}')"
+            [ "$actual" = "$expected" ]
+        done
+    done
+}
+
+@test "bulk updater keeps JSON filtering, previews and explicit table rendering" {
+    root="$WORK/repos"
+    mkdir -p "$root/acme/widget"
+    git clone -q "$repo" "$root/acme/widget/main"
+    run git-worktree-update-all --path "$root" --changed-only --dry-run
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'Organization: acme'* && "$output" == *'Repository: widget'* ]]
+    [[ "$output" == *'Status: WhatIf (behind: 0)'* ]]
+    [[ "$output" != *'Error:'* ]]
+    run git-worktree-update-all --path "$root" --changed-only --dry-run --table
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'ORGANIZATION'* && "$output" == *'BEHIND'* && "$output" != *'Organization:'* ]]
+    run bash -c 'git-worktree-update-all --path "$1" --changed-only --dry-run --json 2>/dev/null' _ "$root"
+    [ "$status" -eq 0 ]
+    json_is '.[0]|.status=="WhatIf" and .organization=="acme" and .repository=="widget" and .error==null'
+    run git-worktree-update-all --path "$root" --changed-only --json
+    [ "$status" -eq 0 ]
+    [ "$output" = '[]' ]
+}

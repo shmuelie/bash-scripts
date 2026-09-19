@@ -5,6 +5,7 @@ set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
 source "$_SHM_ROOT/lib/git/git-common.sh"
+source "$_SHM_ROOT/lib/git/git-display.sh"
 
 usage() { cat <<'EOF'
 Usage: git-worktree-update-all [options]
@@ -20,12 +21,13 @@ Options:
                                        Forward account mapping (repeatable).
   --no-github-account-resolve          Disable account-aware fetch.
   --changed-only                       Flatten actionable result rows.
+  --table                              Use the wide changed-only overview table.
   --json                               Emit JSON.
   --dry-run, --whatif                  Preview repositories without updating.
 EOF
 }
 
-root_arg=''; jobs=4; check_remote=0; changed_only=0; no_account_resolve=0
+root_arg=''; jobs=4; check_remote=0; changed_only=0; no_account_resolve=0; table=0
 organization_args=(); name_args=(); exclude_args=(); github_accounts=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -39,6 +41,7 @@ while [[ $# -gt 0 ]]; do
         --github-account) github_accounts+=("$2"); shift 2 ;;
         --no-github-account-resolve) no_account_resolve=1; shift ;;
         --changed-only) changed_only=1; shift ;;
+        --table) table=1; shift ;;
         --json) JSON=1; shift ;;
         --dry-run|--whatif) DRY_RUN=1; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
@@ -231,6 +234,8 @@ fi
 
 if [[ "$JSON" == "1" ]]; then
     printf '%s\n' "$all_json"
+elif [[ "$changed_only" == "1" && "$table" == 0 ]]; then
+    printf '%s' "$all_json" | git_display_changed_worktrees
 elif [[ "$changed_only" == "1" ]]; then
     printf '%-20s %-24s %-30s %-12s %-7s %s\n' 'ORGANIZATION' 'REPOSITORY' 'BRANCH' 'STATUS' 'BEHIND' 'PATH'
     while IFS="$SHM_FS" read -r org repo_name branch status behind path; do

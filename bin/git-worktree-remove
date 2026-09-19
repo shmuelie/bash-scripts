@@ -5,6 +5,7 @@ set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
 source "$_SHM_ROOT/lib/git/git-common.sh"
+source "$_SHM_ROOT/lib/git/git-ports.sh"
 
 usage() { cat <<'EOF'
 Usage: git-worktree-remove [options] [branch]
@@ -13,27 +14,45 @@ Usage: git-worktree-remove [options] [branch]
 Options:
   --path <worktree-path>             Address the actual worktree path.
   -C, --repository-path <path>       Repository used to resolve the target.
-  --delete-branch                    Delete the backing branch after removal.
+  --keep-branch                      Keep the local branch (deletion is default).
+  --delete-branch[=true|false]        Legacy cleanup flag; false keeps the branch.
   --force                            Force removal.
+  --confirm                          Confirm removal and branch deletion separately.
   --dry-run, --whatif                Preview without removing.
   -v, --verbose                      Verbose output.
 EOF
 }
 
-delete_branch=0; force=0; branch=''; target_path=''; repo_arg=''
+delete_branch=1; keep_branch=0; force=0; branch=''; target_path=''; repo_arg=''; GIT_CONFIRM=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
-        --path) target_path="$2"; shift 2 ;;
-        -C|--repository-path) repo_arg="$2"; shift 2 ;;
-        --delete-branch) delete_branch=1; shift ;;
+        --path) git_option_value "$@"; target_path="$2"; shift 2 ;;
+        -C|--repository-path) git_option_value "$@"; repo_arg="$2"; shift 2 ;;
+        --keep-branch) keep_branch=1; shift ;;
+        --delete-branch)
+            delete_branch=1; shift
+            case "${1:-}" in
+                true|1) shift ;;
+                false|0) delete_branch=0; shift ;;
+            esac ;;
+        --delete-branch=*|--delete-branch:*)
+            value="${1#--delete-branch?}"
+            case "$value" in
+                true|1) delete_branch=1 ;;
+                false|0) delete_branch=0 ;;
+                *) die '--delete-branch expects true, false, 1, or 0.' ;;
+            esac
+            shift ;;
         --force) force=1; shift ;;
+        --confirm) GIT_CONFIRM=1; shift ;;
         --dry-run|--whatif) DRY_RUN=1; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
         -*) die "Unknown option: $1" ;;
         *) [[ -z "$branch" ]] || die "Unexpected argument: $1"; branch="$1"; shift ;;
     esac
 done
+[[ "$keep_branch" == 0 ]] || delete_branch=0
 [[ -z "$branch" || -z "$target_path" ]] || die 'Specify either a branch or --path, not both.'
 require_cmd git
 mode='branch'; value="$branch"
@@ -41,23 +60,37 @@ mode='branch'; value="$branch"
 repo="$(git_resolve_worktree_repository "$repo_arg" "$mode" "$value")" || exit 1
 
 remove_one() {
-    local mode="$1" value="$2" row wt_path wt_branch detached args
+    local mode="$1" value="$2" row wt_path wt_branch detached args code cleanup=0
     row="$(git_resolve_worktree_target "$repo" "$mode" "$value")" || return 1
     IFS="$SHM_FS" read -r wt_path _ wt_branch _ detached _ <<< "$row"
-    should_process "Remove worktree at $wt_path (branch '$wt_branch')" || return 0
+    if [[ "$delete_branch" == 1 && "$detached" != 1 &&
+        -n "$wt_branch" && "$wt_branch" != '(detached)' ]]; then cleanup=1; fi
+    if [[ "$DRY_RUN" == 1 ]]; then
+        should_process "Remove worktree at $wt_path (branch '$wt_branch')" || true
+        if [[ "$cleanup" == 1 ]]; then
+            should_process "Delete local branch '$wt_branch', including unmerged commits, after successful removal" || true
+        fi
+        return 0
+    fi
+    git_should_process "Remove worktree at $wt_path (branch '$wt_branch')" || return 0
     args=(-C "$repo" worktree remove)
     [[ "$force" == "1" ]] && args+=(--force)
     args+=(-- "$wt_path")
-    if ! git "${args[@]}"; then
+    if git "${args[@]}"; then
+        :
+    else
+        code=$?
         [[ "$delete_branch" == "1" && "$detached" != "1" ]] &&
             log_warn "Worktree removal failed; leaving branch '$wt_branch' in place."
-        return 1
+        return "$code"
     fi
     if [[ "$delete_branch" == "1" ]]; then
         if [[ "$detached" == "1" || -z "$wt_branch" || "$wt_branch" == '(detached)' ]]; then
             log_warn 'The target worktree is detached; no branch was removed.'
         else
-            git -C "$repo" branch -D -- "$wt_branch"
+            if git_should_process "Delete local branch '$wt_branch', including unmerged commits"; then
+                git -C "$repo" branch -D -- "$wt_branch"
+            fi
         fi
     fi
 }
@@ -67,6 +100,7 @@ if [[ -n "$target_path" ]]; then
 elif [[ -n "$branch" ]]; then
     remove_one branch "$branch"
 elif [[ ! -t 0 ]]; then
+    [[ "$GIT_CONFIRM" == 0 ]] || die '--confirm requires an explicit branch or --path, not piped branch input.'
     batch_status=0
     while IFS="$SHM_FS"$'\t' read -r piped _; do
         [[ -n "$piped" ]] || continue
