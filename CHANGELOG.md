@@ -8,6 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Worktree updates now restore only a newly created, owned stash and retain
+  entries on conflicts, ownership changes, or cleanup failures.
+- Repository-layout repair skips occupied destinations and never treats the
+  destination as a container during a rename.
+- Explicit worktree target paths resolve their owning repository, including
+  branch cleanup after removal; Bash and zsh completion respect repository
+  selectors and exclude branches already checked out.
+- Git status summaries and prompt segments count tracked type changes as
+  modifications in the index and working tree.
 - Secured Git worktree maintenance by removing the predictable `/tmp` result
   file, using a unique repository-layout staging directory, and reporting
   missing worktrees instead of dropping them from results.

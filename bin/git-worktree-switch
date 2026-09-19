@@ -25,7 +25,9 @@ done
 [[ -z "$branch" || -z "$target_path" ]] || die 'Specify either a branch or --path, not both.'
 [[ -n "$branch" || -n "$target_path" ]] || { usage >&2; exit 2; }
 require_cmd git
-repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
+mode='branch'; value="$branch"
+[[ -n "$target_path" ]] && { mode='path'; value="$target_path"; }
+repo="$(git_resolve_worktree_repository "$repo_arg" "$mode" "$value")" || exit 1
 if [[ -n "$target_path" ]]; then row="$(git_resolve_worktree_target "$repo" path "$target_path")"
 else row="$(git_resolve_worktree_target "$repo" branch "$branch")"; fi
 path="${row%%"$SHM_FS"*}"

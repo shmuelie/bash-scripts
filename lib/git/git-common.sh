@@ -229,6 +229,26 @@ git_worktree_paths_equal() {
     [[ "$(_shm_fullpath "$1")" == "$(_shm_fullpath "$2")" ]]
 }
 
+# Existing path operands select their owning repository; branch operands and
+# deleted worktrees need an explicit repository or the caller's context.
+git_resolve_worktree_repository() {
+    local repo_arg="$1" mode="$2" value="$3" repo common
+    if [[ -n "$repo_arg" ]]; then
+        repo="$(git_resolve_repository_path "$repo_arg")" || return 1
+    fi
+    if [[ "$mode" != 'branch' && -n "$value" && -d "$value" ]]; then
+        repo="$(git_resolve_repository_path "$value")" || return 1
+        git_resolve_worktree_target "$repo" path "$value" >/dev/null || return 1
+        # The target itself may be removed or moved before branch cleanup.
+        common="$(git -C "$repo" rev-parse --git-common-dir)" || return 1
+        git_absolute_from_base "$repo" "$common"
+    elif [[ -n "$repo_arg" ]]; then
+        printf '%s\n' "$repo"
+    else
+        git_resolve_repository_path .
+    fi
+}
+
 # git_resolve_worktree_target REPOSITORY MODE VALUE — MODE is branch, path, or
 # auto. Emits the complete worktree row.
 git_resolve_worktree_target() {
@@ -273,6 +293,39 @@ git_resolve_worktree_target() {
         return 1
     fi
     printf '%s\n' "${matches[0]}"
+}
+
+# An absent stash ref is a valid empty result, not a failed repository lookup.
+git_stash_oid() {
+    local repo="$1" oid code
+    if oid="$(git -C "$repo" rev-parse --verify --quiet refs/stash)"; then
+        printf '%s\n' "$oid"
+    else
+        code=$?
+        [[ "$code" == "1" ]] || {
+            log_error "Could not inspect the stash in '$repo' (exit $code)."
+            return "$code"
+        }
+    fi
+}
+
+git_restore_owned_stash() {
+    local repo="$1" oid="$2" output newest
+    if ! output="$(git -C "$repo" stash apply --quiet "$oid" 2>&1)"; then
+        log_error "Could not restore stash $oid in '$repo'; stash retained: $output"
+        return 1
+    fi
+    newest="$(git_stash_oid "$repo")" || return 1
+    if [[ "$newest" != "$oid" ]]; then
+        log_error "Stash ownership changed in '$repo'; restored $oid but did not drop any stash."
+        return 1
+    fi
+    # Git cannot atomically compare-and-drop a reflog entry; concurrent writers
+    # are unsupported even though we verify the newest entry before dropping it.
+    if ! output="$(git -C "$repo" stash drop --quiet 'stash@{0}' 2>&1)"; then
+        log_error "Could not drop restored stash $oid in '$repo': $output"
+        return 1
+    fi
 }
 
 git_validate_github_host() {

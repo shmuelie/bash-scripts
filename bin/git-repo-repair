@@ -78,14 +78,19 @@ for org_dir in "$root"/*/; do
                 emit "$repo_rel" 'git-at-repo-level' 'none' "$repo_dir" '' 'Skipped-HasWorktrees'; continue
             fi
             target="$repo_dir/$branch"
+            if [[ -e "$target" || -L "$target" ]]; then
+                emit "$repo_rel" 'git-at-repo-level' 'none' "$repo_dir" "$target" 'Skipped-DestinationExists'; continue
+            fi
             if ! should_process "Move clone into '$branch' subdirectory"; then
                 emit "$repo_rel" 'git-at-repo-level' 'would-move' "$repo_dir" "$target" 'WhatIf'; continue
             fi
             stage_dir="$(mktemp -d "${org_dir}.${repo_name}.__layout_tmp.XXXXXX")"
             staged_repo="$stage_dir/$repo_name"
-            if mv -- "$repo_dir" "$staged_repo" 2>/dev/null &&
+            if mv -T -n -- "$repo_dir" "$staged_repo" &&
+                [[ ! -e "$repo_dir" && ! -L "$repo_dir" ]] &&
                 mkdir -p "$(dirname -- "$target")" &&
-                mv -- "$staged_repo" "$target" 2>/dev/null; then
+                mv -T -n -- "$staged_repo" "$target" &&
+                [[ ! -e "$staged_repo" && ! -L "$staged_repo" ]]; then
                 rmdir "$stage_dir" 2>/dev/null || true
                 emit "$repo_rel" 'git-at-repo-level' 'moved' "$repo_dir" "$target" 'Converted'
             else
@@ -96,13 +101,17 @@ for org_dir in "$root"/*/; do
                         [[ "$rollback_parent" == "$repo_dir" ]] && break
                         rollback_parent="$(dirname -- "$rollback_parent")"
                     done
-                    if [[ ! -e "$repo_dir" ]]; then
-                        mv -- "$staged_repo" "$repo_dir" 2>/dev/null || true
+                    if [[ ! -e "$repo_dir" && ! -L "$repo_dir" ]]; then
+                        if ! mv -T -n -- "$staged_repo" "$repo_dir" ||
+                            [[ -e "$staged_repo" || -L "$staged_repo" ]]; then
+                            log_error "Could not roll back staged repository to $repo_dir; it remains at $staged_repo."
+                        fi
                     else
                         log_error "Could not roll back staged repository to $repo_dir; it remains at $staged_repo."
                     fi
                 fi
                 rmdir "$stage_dir" 2>/dev/null || true
+                log_error "Could not move '$repo_dir' to exact destination '$target'."
                 emit "$repo_rel" 'git-at-repo-level' 'move-failed' "$repo_dir" "$target" 'Error'
             fi
             continue
@@ -144,6 +153,9 @@ for org_dir in "$root"/*/; do
             if [[ "$cwd" == "$wt" || "$cwd" == "$wt/"* ]]; then
                 emit "$repo_rel" 'leaf-not-branch' 'none' "$wt" "$target" 'Skipped-CwdInside'; continue
             fi
+            if [[ -e "$target" || -L "$target" ]]; then
+                emit "$repo_rel" 'leaf-not-branch' 'none' "$wt" "$target" 'Skipped-DestinationExists'; continue
+            fi
 
             if [[ "$is_linked" == "1" ]]; then
                 if ! should_process "git worktree move -> '$branch_dir'"; then
@@ -164,9 +176,11 @@ for org_dir in "$root"/*/; do
                     emit "$repo_rel" 'leaf-not-branch' 'would-rename' "$wt" "$target" 'WhatIf'; continue
                 fi
                 mkdir -p "$(dirname -- "$target")"
-                if mv -- "$wt" "$target" 2>/dev/null; then
+                if mv -T -n -- "$wt" "$target" &&
+                    [[ ! -e "$wt" && ! -L "$wt" ]]; then
                     emit "$repo_rel" 'leaf-not-branch' 'renamed' "$wt" "$target" 'Converted'
                 else
+                    log_error "Could not move '$wt' to exact destination '$target'."
                     emit "$repo_rel" 'leaf-not-branch' 'rename-failed' "$wt" "$target" 'Error'
                 fi
             fi

@@ -134,23 +134,40 @@ if [[ ${#behind_list[@]} -gt 0 ]] &&
             continue
         fi
         stashed=0
-        dirty="$(git -C "$wt_path" status --porcelain 2>/dev/null || true)"
+        stash_oid=''
+        if ! dirty="$(git -C "$wt_path" status --porcelain 2>&1)"; then
+            log_error "Could not inspect worktree '$wt_path': $dirty"
+            results+=("$branch$SHM_FS$wt_path${SHM_FS}Failed$SHM_FS$behind$SHM_FS$SHM_FS"0)
+            continue
+        fi
         if [[ -n "$dirty" ]]; then
-            if git -C "$wt_path" stash push --include-untracked --quiet >/dev/null 2>&1; then
-                stashed=1
-            else
+            if ! previous_stash="$(git_stash_oid "$wt_path")"; then
                 results+=("$branch$SHM_FS$wt_path${SHM_FS}StashFailed$SHM_FS$behind$SHM_FS$SHM_FS"0)
                 continue
             fi
+            if ! stash_output="$(git -C "$wt_path" stash push --include-untracked --quiet 2>&1)"; then
+                log_error "Could not stash changes in '$wt_path': $stash_output"
+                results+=("$branch$SHM_FS$wt_path${SHM_FS}StashFailed$SHM_FS$behind$SHM_FS$SHM_FS"0)
+                continue
+            fi
+            if ! stash_oid="$(git_stash_oid "$wt_path")"; then
+                results+=("$branch$SHM_FS$wt_path${SHM_FS}StashFailed$SHM_FS$behind$SHM_FS$SHM_FS"0)
+                continue
+            fi
+            if [[ -z "$stash_oid" || "$stash_oid" == "$previous_stash" ]]; then
+                log_error "No new stash was created for dirty worktree '$wt_path'; leaving the worktree and existing stashes unchanged."
+                results+=("$branch$SHM_FS$wt_path${SHM_FS}StashFailed$SHM_FS$behind$SHM_FS$SHM_FS"0)
+                continue
+            fi
+            stashed=1
         fi
         if git -C "$wt_path" merge --ff-only '@{upstream}' --quiet >/dev/null 2>&1; then
             status='Updated'
         else
             status='Failed'
         fi
-        if [[ "$stashed" == "1" ]] &&
-            ! git -C "$wt_path" stash pop --quiet >/dev/null 2>&1; then
-            log_warn "git stash pop failed for $branch"
+        if [[ "$stashed" == "1" ]] && ! git_restore_owned_stash "$wt_path" "$stash_oid"; then
+            status='StashFailed'
         fi
         results+=("$branch$SHM_FS$wt_path$SHM_FS$status$SHM_FS$behind$SHM_FS$SHM_FS$stashed")
     done

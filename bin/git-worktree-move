@@ -22,7 +22,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$value" && -n "$destination" ]] || { usage >&2; exit 2; }
 require_cmd git
-repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
+repo="$(git_resolve_worktree_repository "$repo_arg" "$mode" "$value")" || exit 1
 row="$(git_resolve_worktree_target "$repo" "$mode" "$value")" || exit 1
 old_path="${row%%"$SHM_FS"*}"
 root_row="$(git_root_worktree "$repo")" || die 'Could not identify the main/root worktree.'

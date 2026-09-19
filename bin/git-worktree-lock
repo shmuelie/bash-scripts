@@ -22,7 +22,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$value" ]] || { usage >&2; exit 2; }
 require_cmd git
-repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
+repo="$(git_resolve_worktree_repository "$repo_arg" "$mode" "$value")" || exit 1
 row="$(git_resolve_worktree_target "$repo" "$mode" "$value")" || exit 1
 path="${row%%"$SHM_FS"*}"
 should_process "Lock worktree at $path" || exit 0

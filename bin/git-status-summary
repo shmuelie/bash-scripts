@@ -93,13 +93,13 @@ while IFS= read -r line; do
     fi
     case "$x" in
         A) idxA=$((idxA+1)) ;;
-        M) idxM=$((idxM+1)) ;;
+        M|T) idxM=$((idxM+1)) ;;
         R) idxM=$((idxM+1)) ;;
         C) idxA=$((idxA+1)) ;;
         D) idxD=$((idxD+1)) ;;
     esac
     case "$y" in
-        M) wrkM=$((wrkM+1)) ;;
+        M|T) wrkM=$((wrkM+1)) ;;
         D) wrkD=$((wrkD+1)) ;;
         A) wrkA=$((wrkA+1)) ;;
     esac

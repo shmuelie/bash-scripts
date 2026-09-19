@@ -36,7 +36,9 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "$branch" || -z "$target_path" ]] || die 'Specify either a branch or --path, not both.'
 require_cmd git
-repo="$(git_resolve_repository_path "${repo_arg:-.}")" || exit 1
+mode='branch'; value="$branch"
+[[ -n "$target_path" ]] && { mode='path'; value="$target_path"; }
+repo="$(git_resolve_worktree_repository "$repo_arg" "$mode" "$value")" || exit 1
 
 remove_one() {
     local mode="$1" value="$2" row wt_path wt_branch detached args

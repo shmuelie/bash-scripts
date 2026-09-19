@@ -1,11 +1,43 @@
 #compdef git-status-summary git-status-segment git-sync git-stale-branch git-worktree-list git-worktree-current git-worktree-root git-worktree-path git-worktree-new git-worktree-add git-worktree-remove git-worktree-switch git-worktree-prune git-worktree-repair git-worktree-lock git-worktree-unlock git-worktree-move git-worktree-update git-worktree-update-all
 # Zsh completion for the Shmuelie Git commands.
 
+_shm_completion_repository() {
+    local repo='.' option
+    local -i i
+    for ((i=2; i<CURRENT; i++)); do
+        option="${words[i]}"
+        case "$option" in
+            -C|--repository-path)
+                (( i + 1 < CURRENT )) || return 1
+                repo="${words[i+1]}"; ((i+=1)) ;;
+            --path)
+                case "${words[1]}" in
+                    git-worktree-add|git-worktree-new|git-worktree-list|git-worktree-current|git-worktree-root|git-worktree-path|git-worktree-prune|git-worktree-update|git-worktree-update-all|git-sync|git-status-summary|git-stale-branch)
+                        (( i + 1 < CURRENT )) || return 1
+                        repo="${words[i+1]}"; ((i+=1)) ;;
+                    git-worktree-switch|git-worktree-remove)
+                        ((i+=1)) ;;
+                esac ;;
+            --worktree-path|--kind|-k|--user|-u|--reason|--expire|--jobs|--organization|--name|--exclude|--github-account|--remote)
+                ((i+=1)) ;;
+        esac
+    done
+    [[ -n "$repo" && -d "$repo" ]] || return 1
+    git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || return 1
+    print -r -- "$repo"
+}
 _shm_worktree_branches() {
-    git worktree list --porcelain 2>/dev/null | sed -n 's#^branch refs/heads/##p'
+    local repo
+    repo="$(_shm_completion_repository)" || return 0
+    git -C "$repo" worktree list --porcelain 2>/dev/null | sed -n 's#^branch refs/heads/##p'
 }
 _shm_local_branches() {
-    git for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null
+    local repo line
+    repo="$(_shm_completion_repository)" || return 0
+    while IFS= read -r line; do
+        [[ "$line" == *'|' ]] && print -r -- "${line%|}"
+    done < <(git -C "$repo" for-each-ref --format='%(refname:short)|%(worktreepath)' refs/heads/ 2>/dev/null)
+    return 0
 }
 _shm_existing_branch() {
     local -a branches
