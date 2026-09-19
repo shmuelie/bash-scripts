@@ -109,7 +109,8 @@ make_remote() {
     run git-tag-list -C "$repo" --json
     [ "$status" -eq 0 ]
     json_is 'length==6'
-    json_is '.[]|select(.name=="v1.0")|.isAnnotated and .objectType=="tag" and .targetObjectType=="commit" and .taggerDate=="2024-01-01T12:00:00+00:00"'
+    # Git 2.55 emits UTC as Z; older Git uses the equivalent +00:00 offset.
+    json_is '.[]|select(.name=="v1.0")|.isAnnotated and .objectType=="tag" and .targetObjectType=="commit" and ((.taggerDate|sub("Z$";"+00:00"))=="2024-01-01T12:00:00+00:00")'
     [ "$(jq -r '.[]|select(.name=="v1.0")|.annotation' <<< "$output")" = "$(cat "$WORK/annotation")" ]
     printf '%s' "$output" | jq -e --rawfile annotation "$WORK/annotation" \
         '.[]|select(.name=="v1.0")|.annotation==$annotation' >/dev/null
