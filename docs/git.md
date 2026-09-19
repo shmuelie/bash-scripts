@@ -57,6 +57,17 @@ operate on another repository without changing directory. Commands whose
 `--path` identifies a worktree use `-C`/`--repository-path` for the containing
 repository.
 
+- An existing exact worktree target root identifies its owning repository, even
+  when the caller is outside that repository. Target paths are not inferred from
+  conventional directory layouts.
+- Missing or prunable worktree target paths require the caller's repository or
+  explicit `-C`/`--repository-path` context to locate their administrative entry.
+- Invalid explicit repository selectors fail before target resolution; they
+  never fall back to the caller's repository or the target's owner.
+- Layout repair skips occupied destinations, including dangling symlinks, and
+  requires an exact rename rather than moving the source inside an existing
+  destination directory.
+
 ## Completion
 
 `completions/bash/shm-git-completion.bash` and
@@ -197,6 +208,13 @@ revert, or bisect. A worktree directory removed during an update is reported as
 `Missing`. With `--check-remote`, a failed remote lookup leaves `NoUpstream`
 worktrees unclassified and emits a warning.
 
+- Automatic update stashes are identified by their exact object ID, not assumed
+  to remain at `stash@{0}`. A no-op save, restoration conflict, stash-ownership
+  mismatch, or cleanup failure is reported as `StashFailed`.
+- Arbitrary external concurrent stash writers are unsupported: verifying an
+  entry's ownership and dropping it are not an atomic operation. Avoid other
+  stash writers, including in linked worktrees, during automatic updates.
+
 `git-worktree-update --changed-only` filters output to `Updated`, `Removed`,
 `Failed` and `StashFailed` without changing which worktrees are updated. Normal
 output is unchanged without the flag. Previews remain on stderr; a filtered-out
@@ -206,6 +224,12 @@ output is unchanged without the flag. Previews remain on stderr; a filtered-out
 default. `--include-never-pushed` also includes branches with no upstream.
 Configured remote lookup failures are errors rather than evidence that every
 candidate branch was deleted.
+
+## Status summary
+
+`git-status-summary` counts Git's `T` (file type changed) status as a modification
+in either column: staged type changes contribute to index modifications, and
+unstaged type changes contribute to working-tree modifications.
 
 ## Bulk updates
 
