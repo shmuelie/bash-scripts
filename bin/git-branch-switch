@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# git-branch-switch — ported from Shmuelie.Git Set-Branch.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+source "$_SHM_ROOT/lib/git/git-ports.sh"
+source "$_SHM_ROOT/lib/git/git-actions.sh"
+git_branch_switch "$@"

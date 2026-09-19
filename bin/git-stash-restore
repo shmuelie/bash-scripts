@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# git-stash-restore — ported from Shmuelie.Git Restore-GitStash.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/git/git-common.sh"
+source "$_SHM_ROOT/lib/git/git-ports.sh"
+source "$_SHM_ROOT/lib/git/git-actions.sh"
+git_stash_restore "$@"
