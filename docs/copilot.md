@@ -79,11 +79,45 @@ configuration files retain native behavior. `--dry-run`/`--whatif` previews do
 not inspect or change the target; removal accepts the preview flag before or
 after the server name.
 
+## Session discovery and filtering
+
+`copilot-session list` defaults to the current directory; `--all` is explicit
+global discovery and `--id` remains an exact, directory-independent lookup.
+List and select share case-insensitive `--repository`, `--branch`, `--cwd`,
+and `--summary` glob filters, combined with AND. An explicit `--cwd` replaces
+the implicit current-directory scope and matches recorded paths literally
+(without resolving or normalizing them). Repository/branch/summary filters
+alone do not expand local discovery. Missing repository, branch, or directory
+metadata never matches an explicit filter, even `*`. Summary means the displayed
+name, then legacy summary, then `(no summary)`.
+
+`--updated-before` accepts an ISO 8601 date or timestamp. `Z` or an explicit
+`+HH:MM`/`-HH:MM` offset identifies an instant; omitted offsets use the local
+timezone and date-only input means local midnight. `--older-than` takes a
+positive integer (1-999999999) with `s`, `m`, `h`, `d`, or `w`, such as `30d`.
+Days mean elapsed 24-hour periods, not calendar days. Both age cutoffs are
+exclusive and combine with AND; the age clock is sampled once per invocation.
+Missing/invalid update times never match age filters (invalid values warn);
+creation and filesystem times are never substituted. Sorting compares normalized
+update instants, newest first, with undated sessions last.
+
+```bash
+copilot-session list --all --repository 'owner/*' --branch 'feature/*' --json
+copilot-session list --cwd '/work/*' --summary '*cleanup*' --older-than 30d --json
+copilot-session list --all --updated-before '2026-08-01T00:00:00Z' --json |
+  jq -r '.[].id' |
+  while IFS= read -r id; do copilot-session remove "$id" --dry-run; done
+```
+
+Discovery never deletes anything. Removal remains a separate explicit,
+previewable operation and revalidates each session ID against the session root.
+
 ## Global session selection
 
 `copilot-session select` searches all recorded sessions, filters by
-`--id`, `--repository`, or `--branch` globs, and resumes from the selected
-session's recorded directory:
+the shared metadata/age filters plus an `--id` glob, and resumes from the
+selected session's recorded directory. `--first` limits newest-first candidates
+only after all filters have matched:
 
 ```bash
 copilot-session select

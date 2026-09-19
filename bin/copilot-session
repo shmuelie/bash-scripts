@@ -11,7 +11,8 @@ usage() { cat <<'EOF'
 Usage: copilot-session <command> [args]
 
 Commands:
-  list [--all] [--id <id>] [--json]   List sessions (defaults to current dir).
+  list [--all] [--id <id>] [filters] [--json]
+                                       List sessions (defaults to current dir).
   select [filters] [prompt] [-- copilot-args...]
                                        Select a session globally and resume it.
   resume <id> [prompt] [-- copilot-args...]
@@ -19,21 +20,16 @@ Commands:
   rename <id> <new-name>               Rename a session (updates workspace.yaml).
   remove <id>... [--dry-run]           Remove sessions by id.
 
-Select filters:
-  --id <glob> --repository <glob> --branch <glob> --first <n>
+Shared filters (AND, case-insensitive globs against recorded metadata):
+  --repository <glob> --branch <glob> --cwd <glob> --summary <glob>
+  --updated-before <ISO-date> --older-than <duration, e.g. 30d>
+  Age cutoffs are exclusive; missing update times do not match.
+  Dates without an offset use local time; date-only means local midnight.
+
+Select options (global discovery; limit applies after filtering):
+  --id <glob> --first <n>
   --stay-in-directory --dry-run/--whatif
 EOF
-}
-
-glob_matches() {
-    local value="$1" pattern="$2" status had_nocasematch=0
-    shopt -q nocasematch && had_nocasematch=1
-    shopt -s nocasematch
-    # shellcheck disable=SC2053  # intentional glob match, mirrors PowerShell -like
-    [[ "$value" == $pattern ]]
-    status=$?
-    [[ "$had_nocasematch" == "1" ]] || shopt -u nocasematch
-    return "$status"
 }
 
 one_line() {
@@ -53,20 +49,20 @@ for _a in "$@"; do [[ "$_a" == "--" ]] && break; case "$_a" in -h|--help) usage;
 
 case "$cmd" in
     list)
-        all_flag=(); only_id=''; json=0
+        filters=(); json=0
         while [[ $# -gt 0 ]]; do
             case "$1" in
-                --all) all_flag=(--all); shift ;;
-                --id) only_id="$2"; shift 2 ;;
+                --all) filters+=(--all); shift ;;
+                --id|--repository|--branch|--cwd|--summary|--updated-before|--older-than)
+                    [[ $# -ge 2 ]] || die "$1 requires a value."
+                    filters+=("$1" "$2"); shift 2 ;;
                 --json) json=1; shift ;;
                 *) die "Unknown option: $1" ;;
             esac
         done
-        [[ -z "$only_id" ]] || copilot_validate_session_id "$only_id"
-        id_args=(); [[ -n "$only_id" ]] && id_args=(--id "$only_id")
+        sessions_out="$(copilot_sessions "${filters[@]}")" || exit 1
         if [[ "$json" == "1" ]]; then
             require_cmd jq
-            sessions_out="$(copilot_sessions "${all_flag[@]}" "${id_args[@]}")"
             if [[ -z "$sessions_out" ]]; then echo '[]'; else
                 printf '%s\n' "$sessions_out" | jq -R -s 'def nz: if .=="" then null else . end;
                     split("\n") | map(select(length>0) | split("\u001f") |
@@ -80,25 +76,24 @@ case "$cmd" in
             while IFS="$SHM_FS" read -r id name s_cwd branch repo created updated ecount esize path; do
                 [[ -z "$id" ]] && continue
                 printf '%-38s %-10s %-8s %s\n' "$id" "$ecount" "$esize" "$name"
-            done < <(copilot_sessions "${all_flag[@]}" "${id_args[@]}")
+            done <<<"$sessions_out"
         fi
         ;;
     select)
-        id_glob='*'; repository_glob='*'; branch_glob='*'; first=0
+        filters=(--all); first=0
         stay=0; prompt=''; rest=()
         while [[ $# -gt 0 ]]; do
             case "$1" in
-                --id|--repository|--branch|--first)
+                --id|--repository|--branch|--cwd|--summary|--updated-before|--older-than|--first)
                     [[ $# -ge 2 ]] || die "$1 requires a value."
                     case "$1" in
-                        --id) id_glob="$2" ;;
-                        --repository) repository_glob="$2" ;;
-                        --branch) branch_glob="$2" ;;
+                        --id) filters+=(--id-glob "$2") ;;
                         --first)
                             [[ "$2" =~ ^[1-9][0-9]*$ ]] ||
                                 die '--first requires a positive integer.'
                             first="$2"
                             ;;
+                        *) filters+=("$1" "$2") ;;
                     esac
                     shift 2 ;;
                 --stay-in-directory) stay=1; shift ;;
@@ -113,15 +108,13 @@ case "$cmd" in
         done
 
         rows=()
+        sessions_out="$(copilot_sessions "${filters[@]}")" || exit 1
         # shellcheck disable=SC2034  # unpacking a fixed row; not all fields used here
         while IFS="$SHM_FS" read -r id name s_cwd branch repo created updated ecount esize path; do
             [[ -n "$id" ]] || continue
-            glob_matches "$id" "$id_glob" || continue
-            glob_matches "$repo" "$repository_glob" || continue
-            glob_matches "$branch" "$branch_glob" || continue
             rows+=("$id$SHM_FS$name$SHM_FS$s_cwd$SHM_FS$branch$SHM_FS$repo$SHM_FS$created$SHM_FS$updated$SHM_FS$ecount$SHM_FS$esize$SHM_FS$path")
             [[ "$first" -gt 0 && ${#rows[@]} -ge "$first" ]] && break
-        done < <(copilot_sessions --all)
+        done <<<"$sessions_out"
 
         [[ ${#rows[@]} -gt 0 ]] ||
             die 'No Copilot sessions matched the requested filters.'

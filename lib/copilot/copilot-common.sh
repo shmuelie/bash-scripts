@@ -103,18 +103,66 @@ copilot_display_name() {
     printf '%s\n' '(no summary)'
 }
 
-# copilot_sessions [--all] [--id ID] — emit one TSV row per session, newest first:
+copilot_glob_matches() {
+    local value="$1" pattern="$2" status=1 had_nocasematch=0
+    shopt -q nocasematch && had_nocasematch=1
+    shopt -s nocasematch
+    # shellcheck disable=SC2053  # intentional case-insensitive metadata glob
+    if [[ "$value" == $pattern ]]; then status=0; fi
+    [[ "$had_nocasematch" == "1" ]] || shopt -u nocasematch
+    return "$status"
+}
+
+copilot_timestamp() {
+    local value="$1"
+    [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}([Tt\ ][0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,9})?)?([Zz]|[+-][0-9]{2}:[0-9]{2})?)?$ ]] ||
+        return 1
+    date -d "$value" +%s.%N 2>/dev/null
+}
+
+# Compare seconds and nanoseconds separately: no floating-point rounding at
+# exclusive boundaries, and no epoch-nanosecond integer overflow.
+copilot_timestamp_before() {
+    local left="$1" right="$2"
+    (( ${left%.*} < ${right%.*} ||
+       (${left%.*} == ${right%.*} && 10#${left#*.} < 10#${right#*.}) ))
+}
+
+# copilot_sessions [--all] [--id ID] [filters] — emit SHM_FS rows, newest first:
 #   id  display  cwd  branch  repository  created  updated  eventCount  eventSize  path
 # Ported from Get-CopilotSession. Without --all or --id, filters to the current cwd.
 copilot_sessions() {
-    local all=0 only_id='' cwd
+    local all=0 only_id='' cwd id_glob='' repository='' branch='' recorded_cwd='' summary=''
+    local before='' older='' now='' age_cutoff=''
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --all) all=1; shift ;;
-            --id) only_id="$2"; shift 2 ;;
-            *) shift ;;
+            --id|--id-glob|--repository|--branch|--cwd|--summary|--updated-before|--older-than)
+                [[ $# -ge 2 && -n "$2" ]] || { log_error "$1 requires a nonempty value."; return 1; }
+                case "$1" in
+                    --id) only_id="$2"; copilot_validate_session_id "$only_id" || return 1 ;;
+                    --id-glob) id_glob="$2" ;;
+                    --repository) repository="$2" ;;
+                    --branch) branch="$2" ;;
+                    --cwd) recorded_cwd="$2" ;;
+                    --summary) summary="$2" ;;
+                    --updated-before)
+                        before="$(copilot_timestamp "$2")" ||
+                            { log_error '--updated-before requires an ISO 8601 date or timestamp.'; return 1; } ;;
+                    --older-than) older="$2" ;;
+                esac
+                shift 2 ;;
+            *) log_error "Unknown session filter: $1"; return 1 ;;
         esac
     done
+    if [[ -n "$older" ]]; then
+        [[ "$older" =~ ^([1-9][0-9]{0,8})([smhdw])$ ]] ||
+            { log_error '--older-than requires a positive elapsed duration, e.g. 30d (1-999999999 s/m/h/d/w).'; return 1; }
+        local amount="${BASH_REMATCH[1]}" unit="${BASH_REMATCH[2]}" multiplier
+        case "$unit" in s) multiplier=1 ;; m) multiplier=60 ;; h) multiplier=3600 ;; d) multiplier=86400 ;; w) multiplier=604800 ;; esac
+        now="$(date +%s.%N)" || return 1
+        age_cutoff="$(( ${now%.*} - amount * multiplier )).${now#*.}"
+    fi
     local state_dir; state_dir="$(copilot_session_state_dir)"
     [[ -d "$state_dir" ]] || return 0
     cwd="$(pwd -P)"
@@ -138,8 +186,39 @@ copilot_sessions() {
         s_repo="$(copilot_ws_field "$ws" repository)"
         display="$(copilot_display_name "$ws")"
 
-        if [[ "$all" == "0" && -z "$only_id" && "$s_cwd" != "$cwd" ]]; then
+        if [[ "$all" == "0" && -z "$only_id" && -z "$recorded_cwd" && "$s_cwd" != "$cwd" ]]; then
             continue
+        fi
+        if [[ -n "$id_glob" ]]; then copilot_glob_matches "$id" "$id_glob" || continue; fi
+        if [[ -n "$repository" ]]; then
+            [[ -n "$s_repo" ]] || continue
+            copilot_glob_matches "$s_repo" "$repository" || continue
+        fi
+        if [[ -n "$branch" ]]; then
+            [[ -n "$s_branch" ]] || continue
+            copilot_glob_matches "$s_branch" "$branch" || continue
+        fi
+        if [[ -n "$recorded_cwd" ]]; then
+            [[ -n "$s_cwd" ]] || continue
+            copilot_glob_matches "$s_cwd" "$recorded_cwd" || continue
+        fi
+        if [[ -n "$summary" ]]; then copilot_glob_matches "$display" "$summary" || continue; fi
+
+        local updated_epoch='' sort_key='-999999999999999999'
+        if [[ -n "$s_updated" ]]; then
+            if updated_epoch="$(copilot_timestamp "$s_updated")"; then
+                sort_key="$updated_epoch"
+            else
+                log_warn "Session '$id' has an invalid updated_at timestamp: $s_updated"
+            fi
+        fi
+        if [[ -n "$before" ]]; then
+            [[ -n "$updated_epoch" ]] || continue
+            copilot_timestamp_before "$updated_epoch" "$before" || continue
+        fi
+        if [[ -n "$age_cutoff" ]]; then
+            [[ -n "$updated_epoch" ]] || continue
+            copilot_timestamp_before "$updated_epoch" "$age_cutoff" || continue
         fi
 
         local events="$dir/events.jsonl" ecount=0 esize=0
@@ -148,12 +227,11 @@ copilot_sessions() {
             esize="$(stat -c '%s' "$events" 2>/dev/null || stat -f '%z' "$events" 2>/dev/null || echo 0)"
         fi
 
-        rows+=("$s_updated$SHM_FS$id$SHM_FS$display$SHM_FS$s_cwd$SHM_FS$s_branch$SHM_FS$s_repo$SHM_FS$s_created$SHM_FS$s_updated$SHM_FS$ecount$SHM_FS$esize$SHM_FS$dir")
+        rows+=("$sort_key$SHM_FS$id$SHM_FS$display$SHM_FS$s_cwd$SHM_FS$s_branch$SHM_FS$s_repo$SHM_FS$s_created$SHM_FS$s_updated$SHM_FS$ecount$SHM_FS$esize$SHM_FS$dir")
     done
 
     [[ ${#rows[@]} -eq 0 ]] && return 0
-    # Sort by leading updated_at descending, then drop the sort key.
-    printf '%s\n' "${rows[@]}" | sort -r -t"$SHM_FS" -k1,1 | cut -d"$SHM_FS" -f2-
+    printf '%s\n' "${rows[@]}" | LC_ALL=C sort -s -t"$SHM_FS" -k1,1nr | cut -d"$SHM_FS" -f2-
 }
 
 # copilot_current_branch — best-effort current git branch, or empty.
