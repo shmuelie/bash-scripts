@@ -110,6 +110,9 @@ copilot-session-maintenance merge <id1> <id2> --remove-source
 
 `--keep` must be a positive integer. Repair, compress, and merge drop malformed
 or truncated JSONL lines when a valid session remains and report the count.
+Invalid empty-ID records and unknown-model tool completions are filtered before
+relocation, so out-of-order malformed completions cannot reappear after repair.
+Valid raw start/completion records retain their payloads.
 Commands that rewrite existing files create `.bak` copies unless
 `--no-backup` is supplied.
 
