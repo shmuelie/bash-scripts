@@ -125,6 +125,15 @@ contents are verified before optional source removal. Preview skips artifact
 inspection and copying. Merge inactive sessions only; concurrent source changes
 and rollback of partially completed source deletion are not supported.
 
+Checkpoint bodies use the same collision and SHA-256 checks, including hidden,
+nested, and unindexed files. Only the root `checkpoints/index.md` is regenerated.
+Its supported format is a plain three-column `# | Title | File` Markdown table:
+numbers are reassigned, while titles and relative file references are retained.
+Markdown links, absolute/traversing paths, missing bodies, linked paths, and
+non-file bodies are rejected. The generated index and all body copies are read
+back and verified before source removal; nested `index.md` files remain ordinary
+checkpoint bodies.
+
 ## Requirements
 
 - `copilot` and `jq` on `PATH`.
