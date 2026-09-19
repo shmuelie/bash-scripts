@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-18
+
 ### Changed
 
 - **Breaking:** `git-worktree-remove` deletes the backing local branch after
@@ -16,6 +18,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Copilot session merges preflight artifact collisions, preserve checkpoint
+  bodies (including unindexed and nested files), and verify copied content
+  before removing any source sessions.
+- Session event repair rejects malformed completions before relocating them,
+  preserving valid payloads, backups, and one-pass idempotence.
+- MCP mutations protect managed configuration symlinks, including dangling
+  links; removal previews work before or after the server name.
+- The Copilot launcher exposes native foreground identity to tmux while
+  retaining exit statuses, terminal recovery, interrupts, and repeated
+  suspend/foreground-resume behavior.
+- Canonical package helpers preserve native failures and reject invalid update
+  identifiers; VS Code updates honor profile selection and dry-run flags.
 - Worktree updates now restore only a newly created, owned stash and retain
   entries on conflicts, ownership changes, or cleanup failures.
 - Repository-layout repair skips occupied destinations and never treats the
@@ -52,6 +66,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Added `package-update` with npm, pip, .NET global-tool, uv package/tool,
+  profile-aware VS Code, and configured PowerShell-resource providers,
+  structured outcomes, read-only previews, confirmation, and fail-fast control.
+- Added authenticated, idempotent user-local .NET SDK installation with
+  architecture checks, existing-host preservation, and opt-in sourceable
+  process PATH integration.
+- Added shared Copilot metadata and elapsed-age filters plus validated JSON
+  selector callbacks without changing automatic-resume preferences.
+- Preserved canonical PowerShell-resource prerelease versions and repository
+  provenance through the optional resource-provider bridge.
 - Added structured branch/tag listing, explicit branch switching and guarded
   deletion, stash save/restore, scoped Git configuration, and literal-path
   restoration with an explicit index opt-in.

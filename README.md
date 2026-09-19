@@ -73,12 +73,18 @@ export PATH="/path/to/bash-scripts/bin:$PATH"
 | Area | Status | Focus |
 |---|---|---|
 | [Git](docs/git.md) | Ported | Branches, tags, stashes, literal restoration, worktrees, bulk updates, repo layout, status, multi-account sync, completion |
-| [Copilot](docs/copilot.md) | Ported | Copilot CLI launcher, sessions, plugins, marketplaces, MCP |
+| [Copilot](docs/copilot.md) | Ported | Copilot CLI launcher, filtered sessions, selector callbacks, lossless merges, plugins, marketplaces, MCP |
 | [Node](docs/node.md) | Ported | Node/nvm versions, npm packages, Azure DevOps npm credentials |
 | [Utilities](docs/utilities.md) | Ported | .NET, Python, VS Code, terminal, services, diagnostics |
+| [Package updates](docs/packages.md) | Ported | Provider-neutral updates for npm, pip, .NET tools, uv, VS Code, and configured PowerShell resources |
 
 Declarative machine setup is available through [`dev-setup`](docs/setup.md) for
 symlinks, Copilot plugins/marketplaces, and uv tools.
+
+[`dotnet-sdk-install`](docs/dotnet-sdk.md) installs verified Microsoft SDKs into
+a user-local directory, without changing PATH by default. Package updates and
+SDK installation support read-only previews; missing optional integrations are
+never installed automatically.
 
 **Worktree removal migration:** `git-worktree-remove` now deletes the backing
 local branch after successful removal, including unmerged branches. Use
@@ -116,7 +122,10 @@ branches are not deleted.
 ./build/scan.sh     # public-content policy scan only
 ```
 
-Requires `shellcheck`, `jq`, and `bats-core`.
+Requires `shellcheck`, `jq`, and `bats-core`. Complete optional regression
+coverage also uses `zsh`, `cc`, `python3`, `tmux`, and `pwsh`. Terminal tests use
+private tmux servers and native mocks; PowerShell-resource tests use synthetic
+modules without querying package feeds.
 
 ## Changelog
 
