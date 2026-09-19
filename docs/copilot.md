@@ -69,6 +69,16 @@ directory:
 Use `--enable-mcp-server <name>` to force one on and forward the CLI's native
 enable flag, or `--disable-mcp-server <name>` to force one off.
 
+### Managed MCP configuration
+
+`copilot-mcp add/remove` refuses native mutation when
+`$COPILOT_HOME/mcp-config.json` (default `~/.copilot/mcp-config.json`) is a
+symbolic link, including a dangling link. Manage the target directly instead;
+the native CLI may replace the link during an atomic save. Ordinary or absent
+configuration files retain native behavior. `--dry-run`/`--whatif` previews do
+not inspect or change the target; removal accepts the preview flag before or
+after the server name.
+
 ## Global session selection
 
 `copilot-session select` searches all recorded sessions, filters by

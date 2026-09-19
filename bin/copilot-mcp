@@ -12,7 +12,7 @@ Usage: copilot-mcp <command> [args]
 Commands:
   list [pattern] [--source user|workspace|plugin|builtin] [--json]
                                List configured MCP servers.
-  add <name> [options]         Add an MCP server.
+  add <name> [options] [--dry-run]  Add an MCP server.
     --transport stdio|http|sse  (default: stdio)
     --command <cmd>             Command for stdio servers.
     --arg <value>               Argument for the stdio command (repeatable).
@@ -21,6 +21,13 @@ Commands:
     --header 'H: V'             HTTP header (repeatable).
   remove <name> [--dry-run]    Remove an MCP server by name.
 EOF
+}
+
+guard_managed_config() {
+    local config
+    config="$(copilot_home)/mcp-config.json"
+    [[ ! -L "$config" ]] ||
+        die "MCP configuration is a symbolic link: $config. Manage its target directly; native add/remove may replace the link."
 }
 
 cmd="${1:-}"; shift || true
@@ -90,6 +97,7 @@ case "$cmd" in
             esac
         done
         should_process "copilot mcp add $name" || exit 0
+        guard_managed_config
         add_args=(mcp add --transport "$transport")
         for e in "${envs[@]:-}"; do [[ -n "$e" ]] && add_args+=(--env "$e"); done
         for h in "${headers[@]:-}"; do [[ -n "$h" ]] && add_args+=(--header "$h"); done
@@ -104,9 +112,20 @@ case "$cmd" in
         "$exe" "${add_args[@]}" || die "Failed to add MCP server: $name"
         ;;
     remove)
-        name="${1:-}"; [[ "$name" == "--dry-run" || "$name" == "--whatif" ]] && { DRY_RUN=1; name="${2:-}"; }
+        name=''
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --dry-run|--whatif) DRY_RUN=1 ;;
+                -*) die "Unknown remove option: $1" ;;
+                *)
+                    [[ -z "$name" ]] || die 'remove accepts only one server name.'
+                    name="$1" ;;
+            esac
+            shift
+        done
         [[ -n "$name" ]] || die 'remove requires a server name.'
         should_process "copilot mcp remove $name" || exit 0
+        guard_managed_config
         "$exe" mcp remove "$name" || die "Failed to remove MCP server: $name"
         ;;
     *) die "Unknown command: $cmd (see --help)" ;;
