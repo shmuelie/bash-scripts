@@ -25,6 +25,8 @@ packages_dotnet_available() {
 packages_normalize() {
     local kind="$1" raw="$2"
     package_validate_inventory <<< "$raw" || return 1
+    jq -e 'all(.[]; (.latest // .latest_version // null) | . == null or type == "string")' \
+        <<< "$raw" >/dev/null || { log_error 'Invalid proposed package version.'; return 1; }
     jq -c --arg kind "$kind" 'map({target:($kind + ":" + .name), name, kind:$kind, version,
         proposedVersion:(.latest // .latest_version // null)})' <<< "$raw"
 }

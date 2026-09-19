@@ -46,6 +46,9 @@ jq -e -f "$_SHM_ROOT/lib/packages/options.jq" <<< "$provider_options" >/dev/null
 while IFS= read -r profile; do
     package_validate_profile "$profile"
 done < <(jq -r '.vscode.profiles // [] | .[]' <<< "$provider_options")
+pattern="$(jq -r '.dotnet.name // "*"' <<< "$provider_options")"
+[[ "$pattern" != -* && "$pattern" != *[[:cntrl:]]* ]] ||
+    die 'dotnet.name must be a wildcard name filter, not an option or control sequence.'
 
 for provider in "${includes[@]}" "${excludes[@]}"; do
     [[ -n "${PACKAGES_AVAILABLE[$provider]:-}" ]] || die "Unknown provider: $provider"

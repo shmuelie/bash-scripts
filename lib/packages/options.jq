@@ -7,7 +7,7 @@ all(.[]; type == "object") and
 ((.dotnet // {}) | allowed(["name"]) and
     (if has("name") then .name | type == "string" and length > 0 else true end)) and
 ((.uv // {}) | allowed(["scope","topLevel"]) and
-    ((.scope // "All") | . == "All" or . == "Packages" or . == "Tools") and
+    (if has("scope") then .scope | . == "All" or . == "Packages" or . == "Tools" else true end) and
     (if has("topLevel") then .topLevel | type == "boolean" else true end)) and
 ((.vscode // {}) | allowed(["profiles"]) and
     (if has("profiles") then .profiles | strings else true end)) and

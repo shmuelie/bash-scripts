@@ -94,6 +94,30 @@ aggregate() {
     run aggregate --provider npm --options '{"pip":{"user":"yes"}}'
     [ "$status" -ne 0 ]
     [ ! -s "$CALL_LOG" ]
+    run aggregate --provider dotnet --options '{"dotnet":{"name":"--local"}}'
+    [ "$status" -ne 0 ]
+    [ ! -s "$CALL_LOG" ]
+}
+
+@test "all registered providers are selected by default and absent integrations stay skipped" {
+    stub npm 'echo "{}"'
+    stub pip 'echo "[]"'
+    stub dotnet 'exit 0'
+    stub uv '[[ "$1" != pip ]] || echo "[]"'
+    stub code 'exit 0'
+    run aggregate
+    [ "$status" -eq 0 ]
+    [ "$(jq -r 'map(.provider)|join(",")' "$WORK/results.json")" = npm,pip,dotnet,uv,vscode,psresource ]
+    [ "$(jq -r '[.[]|select(.provider=="dotnet" or .provider=="psresource")|.status]|join(",")' "$WORK/results.json")" = Skipped,Skipped ]
+    ! grep -q '^pwsh:' "$CALL_LOG"
+    run bash -c '
+        source "$REPO_ROOT/lib/common.sh"; source "$REPO_ROOT/lib/utils/package-validation.sh"
+        source "$REPO_ROOT/lib/packages/core.sh"; source "$REPO_ROOT/lib/packages/providers.sh"
+        have_cmd() { return 1; }
+        packages_run "{}" npm pip dotnet uv vscode > "$WORK/missing.json"
+    '
+    [ "$status" -eq 0 ]
+    [ "$(jq -rs 'all(.[]; .status=="Skipped" and (.reason|length>0))' "$WORK/missing.json")" = true ]
 }
 
 @test "npm aggregate preserves scoped names and observes actual global versions" {
@@ -171,6 +195,25 @@ aggregate() {
     [ "$(jq -r '.[0].status' "$WORK/results.json")" = Skipped ]
 }
 
+@test "dotnet updates only global tools and reports observed rather than proposed versions" {
+    stub dotnet 'case "$1 $2" in
+        "--list-sdks ") echo "8.0.100 [/sdk]";;
+        "tool list") v=1.0; [[ ! -f "$WORK/updated" ]] || v=2.0
+            printf "Package Id      Version      Commands\n--------------------------------------\ndemo      %s        demo\n" "$v";;
+        "tool update") [[ "${FAIL_UPDATE:-0}" == 0 ]] || exit 42; touch "$WORK/updated";;
+        *) exit 99;;
+    esac'
+    run aggregate --provider dotnet
+    [ "$status" -eq 0 ]
+    [ "$(jq -r '.[0] | [.status,.previousVersion,.resultingVersion] | join(",")' "$WORK/results.json")" = Updated,1.0,2.0 ]
+    grep -qx 'dotnet:tool update demo -g' "$CALL_LOG"
+    export FAIL_UPDATE=1
+    run aggregate --provider dotnet --stop-on-failure
+    [ "$status" -ne 0 ]
+    [ "$(jq -r '.[0].status' "$WORK/results.json")" = Failed ]
+    ! grep -q -- '--local' "$CALL_LOG"
+}
+
 @test "uv tools-only stays lazy and preserves upgrade constraints" {
     stub uv 'case "$1 $2" in
         "tool list") if [[ -f "$WORK/updated" ]]; then echo "demo v2.0"; else echo "demo v1.0"; fi; echo "- demo";;
@@ -199,6 +242,7 @@ aggregate() {
 }
 
 @test "VS Code returns one bulk result per default and named profile" {
+    stub vscode-ext 'echo "Older unrelated helper cannot accept profiles" >&2; exit 99'
     stub code 'case "$1" in --list-extensions) echo pub.demo@1.0;; --update-extensions) exit 0;; *) exit 99;; esac'
     run aggregate --provider vscode --options '{"vscode":{"profiles":["Work","Work"]}}' --dry-run
     [ "$status" -eq 0 ]
@@ -210,6 +254,7 @@ aggregate() {
     [ "$(jq -r '.[1].resultingVersion' "$WORK/results.json")" = null ]
     [ "$(jq -r '.[1].resultingInventory[0].fullId' "$WORK/results.json")" = pub.demo ]
     grep -qx 'code:--update-extensions --profile Work' "$CALL_LOG"
+    ! grep -q '^vscode-ext:' "$CALL_LOG"
 }
 
 @test "VS Code failed native completion stops profiles only with fail-fast" {

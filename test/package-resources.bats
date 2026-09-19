@@ -25,17 +25,20 @@ aggregate() {
 @test "resource consumer preserves prerelease labels for numeric roots and canonical metadata variants" {
     # These are canonical responses, not a second implementation of XML/manifest parsing.
     for origin in missing-xml unreadable-xml incomplete-xml recovered-xml-precedence; do
-        jq -cn --arg origin "$origin" '{origin:$origin,before:"1.0.0-beta.2",after:"1.0.0-beta.10",comparison:1,repository:"RecordedFeed"}' > "$RESOURCE_FIXTURE"
+        before=1.0.0-beta.2; after=1.0.0-beta.10
+        if [[ "$origin" == recovered-xml-precedence ]]; then before=1.0.0-xml.7; after=1.0.0-xml.8; fi
+        jq -cn --arg origin "$origin" --arg before "$before" --arg after "$after" \
+            '{origin:$origin,before:$before,after:$after,comparison:1,repository:"RecordedFeed"}' > "$RESOURCE_FIXTURE"
         rm -f "$RESOURCE_UPDATED"
         run aggregate --dry-run
         [ "$status" -eq 0 ]
-        [ "$(jq -r '.[0].previousVersion' "$WORK/results.json")" = 1.0.0-beta.2 ]
+        [ "$(jq -r '.[0].previousVersion' "$WORK/results.json")" = "$before" ]
         [ "$(jq -r '.[0].proposedVersion' "$WORK/results.json")" = null ]
         [ ! -e "$RESOURCE_UPDATED" ]
         run aggregate
         [ "$status" -eq 0 ]
-        [ "$(jq -r '.[0] | [.previousVersion,.resultingVersion,.status] | join(",")' "$WORK/results.json")" = 1.0.0-beta.2,1.0.0-beta.10,Updated ]
-        grep -q 'compare:1.0.0-beta.2:1.0.0-beta.10' "$CALL_LOG"
+        [ "$(jq -r '.[0] | [.previousVersion,.resultingVersion,.status] | join(",")' "$WORK/results.json")" = "$before,$after,Updated" ]
+        grep -q "compare:$before:$after" "$CALL_LOG"
     done
 }
 
