@@ -116,6 +116,14 @@ Commands that rewrite existing files create `.bak` copies unless
 All destructive session operations resolve IDs through a canonical direct-child
 guard under `COPILOT_HOME/session-state`; path-like IDs and symlink escapes are
 rejected. Failed merges clean their partial destination and preserve sources.
+Merge preflights files, research, and rewind artifacts before creating the
+destination. Differing contents, incompatible case-only paths, file/directory
+conflicts, symbolic links (including dangling links), and special files abort
+without removing sources. Overlapping regular files require matching SHA-256
+hashes. Hidden files and nested backup directories are retained, and copied
+contents are verified before optional source removal. Preview skips artifact
+inspection and copying. Merge inactive sessions only; concurrent source changes
+and rollback of partially completed source deletion are not supported.
 
 ## Requirements
 

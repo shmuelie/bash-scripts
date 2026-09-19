@@ -108,11 +108,8 @@ case "$cmd" in
         merge_status=$?
         set -e
         if [[ "$merge_status" -ne 0 ]]; then
-            if [[ -e "$new_dir" || -L "$new_dir" ]]; then
-                if ! rm -rf -- "$new_dir"; then
-                    log_error "Failed to remove partial merged session: $new_dir"
-                fi
-            fi
+            # The helper cleans only a destination it created, never an
+            # existing path that caused its preflight to fail.
             die "$merge_status" 'Merge failed.'
         fi
         [[ "$result_id" == "$new_id" ]] || {
