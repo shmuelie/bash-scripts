@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `git-worktree-remove` deletes the backing local branch after
+  successful removal, including unmerged branches. Use `--keep-branch` or
+  `--delete-branch=false` to retain it; `--confirm` approves each step separately.
+- Changed-only bulk worktree output wraps complete details on narrow terminals;
+  `--table` retains the overview and JSON output is unchanged.
+
 ### Fixed
 
 - Worktree updates now restore only a newly created, owned stash and retain
@@ -44,6 +52,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Added structured branch/tag listing, explicit branch switching and guarded
+  deletion, stash save/restore, scoped Git configuration, and literal-path
+  restoration with an explicit index opt-in.
+- Added `--changed-only` to the single-repository worktree updater.
 - Added consistent Git repository path targeting, complete worktree state and
   path addressing, custom worktree destinations, worktree prune/repair/lock/
   unlock/move helpers, bulk worktree updates, and multi-account GitHub fetch.

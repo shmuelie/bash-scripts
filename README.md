@@ -72,13 +72,19 @@ export PATH="/path/to/bash-scripts/bin:$PATH"
 
 | Area | Status | Focus |
 |---|---|---|
-| [Git](docs/git.md) | Ported | Worktrees, bulk updates, repo layout, status, multi-account sync, completion |
+| [Git](docs/git.md) | Ported | Branches, tags, stashes, literal restoration, worktrees, bulk updates, repo layout, status, multi-account sync, completion |
 | [Copilot](docs/copilot.md) | Ported | Copilot CLI launcher, sessions, plugins, marketplaces, MCP |
 | [Node](docs/node.md) | Ported | Node/nvm versions, npm packages, Azure DevOps npm credentials |
 | [Utilities](docs/utilities.md) | Ported | .NET, Python, VS Code, terminal, services, diagnostics |
 
 Declarative machine setup is available through [`dev-setup`](docs/setup.md) for
 symlinks, Copilot plugins/marketplaces, and uv tools.
+
+**Worktree removal migration:** `git-worktree-remove` now deletes the backing
+local branch after successful removal, including unmerged branches. Use
+`--keep-branch` (or legacy `--delete-branch=false`) to retain it, `--dry-run` to
+preview both operations, and `--confirm` to approve them separately. Remote
+branches are not deleted.
 
 ## Conventions
 

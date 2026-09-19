@@ -319,3 +319,28 @@ EOF
     [ "$output" = "" ]
     [ ! -e SHOULD_NOT_EXIST ]
 }
+
+@test "bash completion registers new Git commands and worktree migration flags" {
+    run bash -c 'source "$1"; complete -p git-branch-list git-tag-list git-branch-switch git-branch-remove git-stash-save git-stash-restore git-config-set git-restore' \
+        -- "$REPO_ROOT/completions/bash/shm-git-completion.bash"
+    [ "$status" -eq 0 ]
+    [ "${#lines[@]}" -eq 8 ]
+    run bash -c 'source "$1"; COMP_WORDS=(git-worktree-remove --); COMP_CWORD=1; _shm_git_complete; printf "%s\n" "${COMPREPLY[@]}"' \
+        -- "$REPO_ROOT/completions/bash/shm-git-completion.bash"
+    [[ "$output" == *--keep-branch* && "$output" == *--delete-branch=false* && "$output" == *--confirm* ]]
+    run bash -c 'source "$1"; COMP_WORDS=(git-config-set --scope ""); COMP_CWORD=2; _shm_git_complete; printf "%s\n" "${COMPREPLY[@]}"' \
+        -- "$REPO_ROOT/completions/bash/shm-git-completion.bash"
+    [ "$output" = $'local\nglobal\nsystem' ]
+}
+
+@test "zsh completion dispatches new command and migration options" {
+    command -v zsh >/dev/null || skip 'zsh is not installed'
+    run zsh -f -c 'compdef() { :; }; zstyle() { :; }; _arguments() { printf "%s\n" "$@"; }; source "$1"; words=(git-config-set --); _shm_git_command' \
+        -- "$REPO_ROOT/completions/zsh/shm-git-completion.zsh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'local global system'* && "$output" == *--confirm* ]]
+    run zsh -f -c 'compdef() { :; }; zstyle() { :; }; _arguments() { printf "%s\n" "$@"; }; source "$1"; words=(git-worktree-remove --); _shm_git_command' \
+        -- "$REPO_ROOT/completions/zsh/shm-git-completion.zsh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *--keep-branch* && "$output" == *'true false'* && "$output" == *--confirm* ]]
+}

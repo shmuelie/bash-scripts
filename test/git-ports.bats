@@ -610,9 +610,11 @@ EOF
 
 @test "single updater defaults to all statuses and changed-only preserves actionable failures" {
     make_update_fixture
-    run env PATH="$WORK/stubs:$PATH" git-worktree-update -C "$repo" --json
+    run bash -c 'PATH="$1:$PATH" git-worktree-update -C "$2" --json 2>"$3"' \
+        _ "$WORK/stubs" "$repo" "$WORK/errors"
     [ "$status" -ne 0 ]
     json_is 'map(.status)|sort == ["Current","Failed","InProgress","Missing","NoUpstream","Removed","Skipped","StashFailed","Updated"]'
+    grep -q 'stash failed' "$WORK/errors"
     # The synthetic update has an identical tree; rewind only its disposable ref.
     git -C "$WORK/updated" update-ref refs/heads/updated HEAD~1
     run bash -c 'PATH="$1:$PATH" git-worktree-update -C "$2" --changed-only --json 2>"$3"' \
