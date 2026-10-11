@@ -70,6 +70,9 @@ repository.
 
 ## Completion
 
+See the [shared completion reference](completions.md) for all-command coverage,
+installer activation, manual Bash/zsh setup, and safe discovery boundaries.
+
 `completions/bash/shm-git-completion.bash` and
 `completions/zsh/shm-git-completion.zsh` suggest worktree branch names for
 `git-worktree-switch`, `git-worktree-remove`, `git-worktree-add`, and the

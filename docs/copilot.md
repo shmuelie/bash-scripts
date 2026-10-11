@@ -6,6 +6,10 @@ executable in `bin/`.
 
 ## Commands
 
+All commands support [Bash and zsh completion](completions.md). Session
+identifier completion reuses canonical scope and metadata filters, including
+worktree-move identity, without launching a picker or the native CLI.
+
 | Area | Command |
 |---|---|
 | Launcher | `start-copilot`, `copilot-launch-plan` |

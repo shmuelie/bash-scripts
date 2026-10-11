@@ -7,6 +7,7 @@ setup() {
     export REPO_ROOT WORK
     export HOME="$WORK/home" COPILOT_HOME="$WORK/home/copilot"
     export REAL_GIT="$(command -v git)"
+    export REAL_NODE="$(command -v node)"
     export PATH="$WORK/stubs:$PATH"
     for native in copilot npm pip pip3 dotnet uv code perf curl fzf node az systemctl; do
         cat > "$WORK/stubs/$native" <<'EOF'
@@ -627,5 +628,64 @@ EOF
     complete_for bash start-copilot --selector "$WORK/stubs/safe-"
     [ "$output" = "$WORK/stubs/safe-selector" ]
     [ ! -e "$WORK/MUTATED" ]
+    no_native_calls
+}
+
+session_scope_fixture() {
+    local id="$1" repository="$2" branch="$3" cwd="$4"
+    mkdir -p "$COPILOT_HOME/session-state/$id"
+    printf 'name: %s\nrepository: %s\nbranch: %s\ncwd: %s\nupdated_at: 2026-10-01T00:00:00Z\n' \
+        "$id" "$repository" "$branch" "$cwd" > "$COPILOT_HOME/session-state/$id/workspace.yaml"
+}
+
+@test "both shells complete moved GitHub sessions through canonical repository and branch scope" {
+    mkdir -p "$WORK/moved-project" "$WORK/other"
+    git -C "$WORK/moved-project" init -q -b main
+    git -C "$WORK/moved-project" remote add origin https://github.com/owner/repo.git
+    session_scope_fixture moved-one owner/repo main /old/worktree
+    session_scope_fixture moved-two owner/repo main /another/old/worktree
+    session_scope_fixture wrong-repository other/repo main "$WORK/moved-project"
+    session_scope_fixture wrong-branch owner/repo topic "$WORK/moved-project"
+    cd "$WORK/moved-project"
+    local before
+    before="$(sha256sum "$COPILOT_HOME"/session-state/*/workspace.yaml)"
+    for shell in bash zsh; do
+        complete_for "$shell" copilot-session resume moved-
+        [ "$output" = $'moved-one\nmoved-two' ]
+        complete_for "$shell" copilot-session list --branch topic --id ''
+        [ -z "$output" ]
+        complete_for "$shell" copilot-session list --all --branch topic --id ''
+        [ "$output" = wrong-branch ]
+        cd "$WORK/other"
+        complete_for "$shell" start-copilot --change-dir ../moved-project --resume-session moved-
+        [ "$output" = $'moved-one\nmoved-two' ]
+        [ "$PWD" = "$WORK/other" ]
+        cd "$WORK/moved-project"
+    done
+    [ "$(sha256sum "$COPILOT_HOME"/session-state/*/workspace.yaml)" = "$before" ]
+    no_native_calls
+}
+
+@test "both shells use canonical Azure origin normalization without remote or picker calls" {
+    # Node executes only the local canonical identity parser, not a CLI engine.
+    ln -sf "$REAL_NODE" "$WORK/stubs/node"
+    mkdir -p "$WORK/azure-project"
+    git -C "$WORK/azure-project" init -q -b main
+    git -C "$WORK/azure-project" remote add origin https://dev.azure.com/org/Project%20Name/_git/Repo%20Name.git
+    session_scope_fixture azure-moved 'org/Project Name/Repo Name' main /old/worktree
+    session_scope_fixture azure-conflict 'org/Other Project/Repo Name' main "$WORK/azure-project"
+    session_scope_fixture azure-branch 'org/Project Name/Repo Name' topic "$WORK/azure-project"
+    cd "$WORK/azure-project"
+    for shell in bash zsh; do
+        complete_for "$shell" copilot-session resume azure-
+        [ "$output" = azure-moved ]
+        complete_for "$shell" copilot-launch-plan --resume-session azure-
+        [ "$output" = azure-moved ]
+    done
+    git remote set-url origin 'https://dev.azure.com/org/Project%2FName/_git/Repo%20Name'
+    for shell in bash zsh; do
+        complete_for "$shell" copilot-session resume azure-moved
+        [ -z "$output" ]
+    done
     no_native_calls
 }

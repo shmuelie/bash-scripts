@@ -1,5 +1,8 @@
 # Node commands
 
+See [shell completion](completions.md) for operation-specific Bash/zsh flags
+and values. Completion does not source `nvm.sh` or query remote version catalogs.
+
 A bash port of the `Shmuelie.Node` PowerShell module, re-targeted from
 nvm-windows to [nvm.sh](https://github.com/nvm-sh/nvm). Every command is an
 executable in `bin/`.

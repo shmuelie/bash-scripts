@@ -1,5 +1,8 @@
 # Utilities commands
 
+See [shell completion](completions.md) for Bash/zsh command flags, enumerated
+values, quoted paths, and package/SDK completion without native mutations.
+
 A bash port of the `Shmuelie.Utilities` PowerShell module. Cross-platform
 helpers are ported directly; Windows-only commands are re-implemented with Linux
 equivalents. Executables live in `bin/`; a few shell-only helpers are sourceable

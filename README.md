@@ -14,7 +14,7 @@ equivalents where appropriate.
 ```
 bin/          Executable commands (kebab-case, e.g. git-worktree-new)
 lib/          Sourceable helper libraries (common.sh + per-area helpers)
-completions/  bash and zsh completion for the worktree commands
+completions/  Bash and zsh completion for all public commands
 build/        Lint, public-content scan, and test runner
 test/         bats-core test suites
 ```
@@ -68,6 +68,20 @@ away from the repo on their own):
 export PATH="/path/to/bash-scripts/bin:$PATH"
 ```
 
+## Shell completion
+
+The installer activates [Bash and zsh completion](docs/completions.md) for all
+60 public commands, including subcommands, supported flags, enumerated values,
+quoted paths, and locally scoped Git/Copilot identifiers. Open a new shell
+after installing, or source the configured rc file. Static completion makes no
+network calls and never installs dependencies or performs command mutations.
+
+Use `--no-completions` to omit activation or remove an earlier managed
+activation on reinstall. For manual setup, source
+`completions/bash/shm-git-completion.bash` in Bash, or add `completions/zsh` to
+zsh's `fpath` before `compinit`. The completion reference includes exact setup
+commands, scope rules, and intentional dynamic-discovery limitations.
+
 ## Modules
 
 | Area | Status | Focus |
@@ -110,7 +124,8 @@ branches are not deleted.
 ## Requirements
 
 - `bash` 4+, `git`, and `jq`.
-- Optional: `fzf` for nicer interactive pickers (falls back to `select`).
+- Optional: `fzf` for searchable pickers; Copilot sessions also have a
+  descriptive paginated terminal picker.
 - `node` for the Copilot session-maintenance subcommands (always present where
   the Copilot CLI runs).
 
