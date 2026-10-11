@@ -21,6 +21,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Bash and zsh completion for every public command, with operation-specific
+  flags and values, quoted paths, safe canonical Git/session discovery, and
+  fresh-shell installer activation including zsh autoload.
 - Origin-and-branch session discovery survives GitHub and Azure DevOps worktree
   moves, with conservative directory fallback for incomplete metadata.
 - Descriptive 22-session picker pages with next/previous navigation, explicit
