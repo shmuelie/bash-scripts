@@ -32,8 +32,9 @@ if [[ "$want_json" == "1" ]]; then
     require_cmd jq
     { if [[ ${#COPILOT_ARGS[@]} -gt 0 ]]; then printf '%s\0' "${COPILOT_ARGS[@]}"; fi; printf 'x'; } | jq -R -s \
         --arg exe "$COPILOT_EXE" \
+        --arg cwd "$COPILOT_CWD" \
         --argjson passthrough "$([[ "$COPILOT_PASSTHROUGH" == "1" ]] && echo true || echo false)" \
-        '{exe:$exe, passthrough:$passthrough,
+        '{exe:$exe, cwd:$cwd, passthrough:$passthrough,
           args: (split("\u0000")[:-1])}'
 else
     printf 'Exe: %s\n' "$COPILOT_EXE"

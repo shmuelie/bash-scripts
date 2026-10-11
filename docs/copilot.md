@@ -242,8 +242,15 @@ start-copilot --no-auto-resume --selector ./choose-session --model fast
 
 ## Directory changes
 
-`start-copilot` runs in place. `copilot-session resume` execs `copilot`
-directly.
+`start-copilot -C <directory>` (also `--change-dir`) resolves a relative target
+once against the caller and requires an existing filesystem directory.
+Session/branch selection, selector callbacks, executable discovery (including
+relative PATH entries), and MCP path policy use that effective directory,
+including preview and plan-only calls. Planning never changes the caller's
+directory, even on errors or cancellation. Normal launch arguments contain one
+absolute native directory option; help/update retain their passthrough spelling.
+The JSON launch plan includes `cwd`, the absolute effective directory.
+`copilot-session resume` execs `copilot` directly.
 
 ### Terminal lifecycle
 
