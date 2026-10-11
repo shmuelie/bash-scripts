@@ -131,3 +131,24 @@ fixture() {
         [.args[] | select(.=="-C" or .=="--change-dir")] == ["--change-dir"] and
         ([.args[] | select(.==$cwd)]|length)==1'
 }
+
+@test "effective directory combines native MCP auth routing and lossless plan arguments" {
+    config=$'{\n  "mcpServers": {"approved": {"type": "http", "url": "https://example.invalid/mcp"}}\n}'
+    printf '%s\n' "$config" > "$WORK/target/scoped.json"
+    printf '%s\n' '{"mcpServers":{"approved":{"type":"http","url":"https://wrong.invalid/mcp"}}}' > "$WORK/caller/scoped.json"
+    local source
+    for source in @scoped.json "$config"; do
+        run copilot-launch-plan -C ../target --no-resume --additional-mcp-config "$source" \
+            --mcp-github-auth approved=https://example.invalid --fleet \
+            --auto-tier intelligence --model auto --prompt $'first line\nsecond line' --json
+        [ "$status" -eq 0 ]
+        jq -e --arg cwd "$WORK/target" --arg config "$source" '
+            .cwd==$cwd and .args as $args |
+            $args[($args|index("--additional-mcp-config"))+1]==$config and
+            $args[($args|index("-p"))+1]=="first line\nsecond line" and
+            $args[($args|index("--auto-tier"))+1]=="intelligence" and
+            [$args[]|select(.=="-C" or .=="--change-dir")]==["-C"] and
+            $args[($args|index("-C"))+1]==$cwd' <<< "$output"
+        [ "$PWD" = "$WORK/caller" ]
+    done
+}

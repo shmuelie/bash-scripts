@@ -8,6 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Workspace metadata reading and rewriting preserve block-scalar boundaries
+  and original line endings; malformed session timestamps are reported and
+  isolated from healthy inventory results.
+- Copilot launch planning resolves the requested directory before executable
+  discovery, session selection, and MCP policy, forwarding it exactly once.
 - Copilot plugin and marketplace discovery distinguish native failures from
   empty inventories, and setup checks match exact managed plugin sources.
 - Git status summaries and worktree listings retain the original branch during
@@ -16,6 +21,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Origin-and-branch session discovery survives GitHub and Azure DevOps worktree
+  moves, with conservative directory fallback for incomplete metadata.
+- Descriptive 22-session picker pages with next/previous navigation, explicit
+  new/cancel actions, Unicode-aware labels, and full candidate reachability.
 - Strict native JSON plugin inventory with a safe legacy fallback, MCP tool
   filters, bounded timeouts, and enabled/tool-state reporting.
 - Validated, nonauthenticating plans for scoped GitHub MCP authentication.
