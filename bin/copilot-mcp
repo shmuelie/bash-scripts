@@ -19,8 +19,15 @@ Commands:
     --url <url>                 URL for http/sse servers.
     --env KEY=VALUE             Environment variable (repeatable).
     --header 'H: V'             HTTP header (repeatable).
+    --tools <filter>           '*' (all), '' (none), or comma-separated tool names.
+    --timeout <ms>             Timeout in milliseconds (1..4294967295).
   remove <name> [--dry-run]    Remove an MCP server by name.
 EOF
+}
+
+validate_tools() {
+    [[ -z "$1" || "$1" == '*' || "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*(,[A-Za-z0-9][A-Za-z0-9._:-]*)*$ ]] ||
+        die "Tools must be '*', empty, or comma-separated non-empty tool names."
 }
 
 guard_managed_config() {
@@ -46,37 +53,59 @@ case "$cmd" in
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --json) json=1; shift ;;
-                --source) source_filter="$2"; shift 2 ;;
+                --source)
+                    [[ $# -ge 2 ]] || die '--source requires a value.'
+                    source_filter="$2"; shift 2
+                    case "$source_filter" in user|workspace|plugin|builtin) ;; *) die 'Invalid MCP source.' ;; esac ;;
                 *) pattern="$1"; shift ;;
             esac
         done
-        raw="$("$exe" mcp list --json 2>&1)"
+        raw="$(copilot_discover mcp list --json)" || exit $?
+        if ! normalized="$(jq -cs '
+            def nonempty: type == "string" and length > 0;
+            def optional_text: . == null or nonempty;
+            def tools: type == "string" and (. == "" or . == "*" or
+                test("^[A-Za-z0-9][A-Za-z0-9._:-]*(,[A-Za-z0-9][A-Za-z0-9._:-]*)*$"));
+            if length != 1 then error("Expected one MCP JSON document") else .[0] end |
+            if type != "object" or (.mcpServers | type != "object") then
+                error("Expected mcpServers map") else .mcpServers | to_entries end |
+            if all(.[]; (.key | nonempty) and (.value |
+                type == "object" and (.type | nonempty) and (.source | nonempty) and
+                (.enabled | type == "boolean") and (.tools | tools) and
+                (.command | optional_text) and (.url | optional_text) and
+                (.args == null or (.args | type == "array" and all(.[]; type == "string")))))
+            then map(.key as $name | .value |
+                {name:$name,type,command:(.command // null),
+                 args:(if ((.args // []) | length) == 0 then null else .args | join(" ") end),
+                 url:(.url // null),source,enabled,tools})
+            else error("Invalid MCP server metadata") end' <<< "$raw" 2>/dev/null)"; then
+            die 'copilot mcp list --json returned invalid JSON or schema.'
+        fi
         # Build normalized rows delimited by SHM_FS (US) so empty fields survive.
-        mapfile -t rows < <(printf '%s' "$raw" | jq -r '.mcpServers // {} | to_entries[] |
-            [.key, (.value.type // ""), (.value.command // ""),
-             ((.value.args // []) | join(" ")), (.value.url // ""),
-             (.value.source // "")] | join("\u001f")')
+        rows_text="$(jq -r '.[] | [.name,.type,(.command // ""),(.args // ""),
+            (.url // ""),.source,(.enabled | tostring),.tools] | join("\u001f")' <<< "$normalized")"
+        mapfile -t rows <<< "$rows_text"
         out=()
         for r in "${rows[@]:-}"; do
             [[ -z "$r" ]] && continue
-            IFS="$SHM_FS" read -r name type command args url src <<< "$r"
+            IFS="$SHM_FS" read -r name type command args url src enabled tools <<< "$r"
             # shellcheck disable=SC2053
             [[ "$name" == $pattern ]] || continue
             [[ -n "$source_filter" && "$src" != "$source_filter" ]] && continue
-            out+=("$name$SHM_FS$type$SHM_FS$command$SHM_FS$args$SHM_FS$url$SHM_FS$src")
+            out+=("$name$SHM_FS$type$SHM_FS$command$SHM_FS$args$SHM_FS$url$SHM_FS$src$SHM_FS$enabled$SHM_FS$tools")
         done
         if [[ "$json" == "1" ]]; then
             if [[ ${#out[@]} -eq 0 ]]; then echo '[]'; else
                 printf '%s\n' "${out[@]}" | jq -R -s 'def nz: if .=="" then null else . end;
                     split("\n") | map(select(length>0) | split("\u001f") |
                     {name:.[0], type:(.[1]|nz), command:(.[2]|nz), args:(.[3]|nz),
-                     url:(.[4]|nz), source:(.[5]|nz)})'
+                     url:(.[4]|nz), source:(.[5]|nz), enabled:(.[6]=="true"), tools:.[7]})'
             fi
         else
             for r in "${out[@]:-}"; do
                 [[ -z "$r" ]] && continue
-                IFS="$SHM_FS" read -r name type command args url src <<< "$r"
-                printf '%-24s %-6s %-8s %s\n' "$name" "$type" "$src" "${url:-$command $args}"
+                IFS="$SHM_FS" read -r name type command args url src enabled tools <<< "$r"
+                printf '%-24s %-6s %-8s enabled=%s tools=%s %s\n' "$name" "$type" "$src" "$enabled" "$tools" "${url:-$command $args}"
             done
         fi
         ;;
@@ -84,7 +113,12 @@ case "$cmd" in
         name="${1:-}"; shift || true
         [[ -n "$name" && "$name" != -* ]] || die 'add requires a server name.'
         transport='stdio'; command=''; url=''; args=(); envs=(); headers=()
+        tools=''; tools_present=0; timeout=''; timeout_present=0
         while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --transport|--command|--arg|--url|--env|--header|--tools|--timeout)
+                    [[ $# -ge 2 ]] || die "$1 requires a value." ;;
+            esac
             case "$1" in
                 --transport) transport="$2"; shift 2 ;;
                 --command) command="$2"; shift 2 ;;
@@ -92,15 +126,31 @@ case "$cmd" in
                 --url) url="$2"; shift 2 ;;
                 --env) envs+=("$2"); shift 2 ;;
                 --header) headers+=("$2"); shift 2 ;;
+                --tools) tools="$2"; tools_present=1; shift 2 ;;
+                --tools=*) tools="${1#*=}"; tools_present=1; shift ;;
+                --timeout) timeout="$2"; timeout_present=1; shift 2 ;;
                 --dry-run|--whatif) DRY_RUN=1; shift ;;
                 *) die "Unknown option: $1" ;;
             esac
         done
+        case "$transport" in stdio|http|sse) ;; *) die 'Transport must be stdio, http, or sse.' ;; esac
+        [[ "$tools_present" == "0" ]] || validate_tools "$tools"
+        if [[ "$timeout_present" == "1" ]]; then
+            if [[ ! "$timeout" =~ ^[0-9]{1,10}$ ]]; then
+                die 'Timeout must be 1..4294967295 milliseconds.'
+            elif ((10#$timeout < 1 || 10#$timeout > 4294967295)); then
+                die 'Timeout must be 1..4294967295 milliseconds.'
+            fi
+        fi
         should_process "copilot mcp add $name" || exit 0
         guard_managed_config
         add_args=(mcp add --transport "$transport")
         for e in "${envs[@]:-}"; do [[ -n "$e" ]] && add_args+=(--env "$e"); done
         for h in "${headers[@]:-}"; do [[ -n "$h" ]] && add_args+=(--header "$h"); done
+        if [[ "$tools_present" == "1" ]]; then
+            if [[ -z "$tools" ]]; then add_args+=(--tools=); else add_args+=(--tools "$tools"); fi
+        fi
+        [[ -z "$timeout" ]] || add_args+=(--timeout "$timeout")
         add_args+=("$name")
         if [[ "$transport" == "stdio" ]]; then
             add_args+=(--)

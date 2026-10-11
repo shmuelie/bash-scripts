@@ -23,7 +23,7 @@ case "$1 $2" in
       list) printf '  ◆ dotnet-agent-skills (GitHub: dotnet/skills)\n  • community (URL: https://example.com/mp.json)\n' ;;
       browse) printf '  • alpha - First plugin\n  • beta - Second plugin\n' ;;
     esac ;;
-  "mcp list") printf '{"mcpServers":{"ctx7":{"type":"http","url":"https://mcp.context7.com/mcp","source":"user"},"local":{"type":"stdio","command":"npx","args":["-y","@x/y"],"source":"workspace"}}}\n' ;;
+  "mcp list") printf '{"mcpServers":{"ctx7":{"type":"http","url":"https://mcp.context7.com/mcp","source":"user","enabled":true,"tools":"*"},"local":{"type":"stdio","command":"npx","args":["-y","@x/y"],"source":"workspace","enabled":false,"tools":""}}}\n' ;;
 esac
 exit 0
 EOF
