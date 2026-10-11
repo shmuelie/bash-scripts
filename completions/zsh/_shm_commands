@@ -1,0 +1,128 @@
+#compdef ado-npm-token copilot-launch-plan copilot-marketplace copilot-mcp copilot-plugin copilot-session copilot-session-maintenance dev-setup dotnet-sdk-install dotnet-tool format-duration git-branch-list git-branch-remove git-branch-switch git-config-set git-repo-new git-repo-repair git-restore git-stale-branch git-stash-restore git-stash-save git-status-segment git-status-summary git-sync git-tag-list git-worktree-add git-worktree-current git-worktree-list git-worktree-lock git-worktree-move git-worktree-new git-worktree-path git-worktree-prune git-worktree-remove git-worktree-repair git-worktree-root git-worktree-switch git-worktree-unlock git-worktree-update git-worktree-update-all in-location installed-apps is-elevated node-alias node-version npm-package nvm-config package-update perf-record pip-package repair-global-json reset-terminal service-process start-copilot start-vscode terminal-config uv-package uv-tool vscode-chat vscode-ext
+# All static contracts are shared with Bash; no native --help invocation.
+_SHM_COMPLETION_ROOT="${${(%):-%x}:A:h:h:h}"
+source "$_SHM_COMPLETION_ROOT/lib/completion.sh"
+
+_shm_zsh_prepare() {
+    _shm_completion_prepare "${(Q)words[1]}" "${(Q)words[CURRENT]}" \
+        "${(@Q)words[2,CURRENT-1]}"
+    _shm_completion_apply_suffix "${(@Q)words[CURRENT+1,-1]}"
+}
+
+_shm_completion_repository() {
+    _shm_zsh_prepare
+    _shm_completion_git_repository
+}
+
+_shm_local_branches() {
+    _shm_zsh_prepare
+    _shm_kind=available-branch
+    _shm_completion_git_candidates
+}
+
+_shm_worktree_branches() {
+    _shm_zsh_prepare
+    _shm_kind=worktree-branch
+    _shm_completion_git_candidates
+}
+
+_shm_zsh_files() {
+    # _files/_directories expand user expressions and named directories.
+    # Instead, use a literal quoted prefix and only a fixed suffix glob.
+    setopt localoptions bareglobqual
+    local prefix='' leaf="$_shm_cur" folder candidate
+    local -a candidates
+    [[ -d "$_shm_file_base" ]] || return 0
+    if [[ "$_shm_cur" == */* ]]; then
+        prefix="${_shm_cur%/*}/"; leaf="${_shm_cur##*/}"
+    fi
+    if [[ "$prefix" == /* ]]; then folder="$prefix"
+    else folder="$_shm_file_base/$prefix"; fi
+    for candidate in "$folder""$leaf"*(N); do
+        [[ "$_shm_kind" != directory || -d "$candidate" ]] || continue
+        [[ "$_shm_kind" != executable || -d "$candidate" || -x "$candidate" ]] || continue
+        candidate="$prefix${candidate:t}"
+        if [[ "$candidate" == /* ]]; then
+            [[ ! -d "$candidate" ]] || candidate+='/'
+        else
+            [[ ! -d "$_shm_file_base/$candidate" ]] || candidate+='/'
+        fi
+        candidates+=("$candidate")
+    done
+    if (( ${#candidates} )); then
+        [[ -z "$_shm_path_prefix" ]] || compset -p "${#_shm_path_prefix}"
+        compadd -f -W "$_shm_file_base" -- "${candidates[@]}"
+    fi
+    return 0
+}
+
+_shm_zsh_context() {
+    _shm_zsh_prepare
+    case "$_shm_kind" in
+        directory|file) _shm_zsh_files ;;
+        executable)
+            if [[ "$_shm_cur" == */* ]]; then _shm_zsh_files
+            else
+                local directory candidate
+                local -a candidates
+                for directory in "${path[@]}"; do
+                    directory="${directory:-.}"
+                    for candidate in "$directory"/"$_shm_cur"*(N); do
+                        [[ -f "$candidate" && -x "$candidate" ]] || continue
+                        candidates+=("${candidate:t}")
+                    done
+                done
+                (( ${#candidates} )) && compadd -- "${(@u)candidates[@]}"
+            fi ;;
+        *)
+            local -a candidates
+            local output
+            output="$(_shm_completion_candidates)"
+            candidates=("${(@f)output}")
+            candidates=("${(@)candidates:#}")
+            if (( ${#candidates} )); then
+                case "$_shm_kind" in
+                    available-branch|worktree-branch)
+                        compadd -M 'm:{a-zA-Z}={A-Za-z} l:|=* r:|=*' -- "${candidates[@]}" ;;
+                    *) compadd -- "${candidates[@]}" ;;
+                esac
+            fi ;;
+    esac
+    return 0
+}
+
+_shm_git_command() {
+    # Keep compsys's caller-provided options (notably extendedglob/nonomatch).
+    setopt localoptions
+    local CURRENT="${CURRENT:-2}"
+    _shm_zsh_prepare
+    local option spec
+    local -a specs
+    for option in ${=_shm_options}; do
+        case "$_shm_cmd:$option" in
+            git-worktree-remove:--delete-branch=*) continue ;;
+            git-worktree-remove:--delete-branch)
+                specs+=('--delete-branch=-[legacy cleanup setting]::boolean:(true false 1 0)')
+                continue ;;
+        esac
+        if _shm_completion_equals_allowed "$option" && [[ "$option" != --delete-branch ]]; then
+            spec="${option}=[option]"
+        else
+            spec="${option}[option]"
+        fi
+        if _shm_completion_repeatable "$option"; then spec="*$spec"; fi
+        _shm_completion_value "$option"
+        case "$_shm_value" in
+            'enum:*') spec+=':value:_shm_zsh_context' ;;
+            enum:*) spec+=":value:(${_shm_value#enum:})" ;;
+            '') ;;
+            *) spec+=':value:_shm_zsh_context' ;;
+        esac
+        specs+=("$spec")
+    done
+    _arguments "${specs[@]}" '*:argument:_shm_zsh_context'
+}
+
+if [[ "${_SHM_COMPLETION_LOAD_ONLY:-0}" != 1 ]]; then
+    _shm_git_command "$@"
+fi

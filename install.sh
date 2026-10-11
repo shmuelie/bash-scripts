@@ -131,27 +131,23 @@ detect_rc() {
 RC="$(detect_rc)"
 
 rc_shell_kind() {
-    case "$RC" in *zshrc) printf 'zsh\n' ;; *) printf 'bash\n' ;; esac
+    case "$RC" in
+        *zshrc|*.zsh) printf 'zsh\n' ;;
+        *bashrc|*.bash) printf 'bash\n' ;;
+        *) case "${SHELL:-}" in */zsh) printf 'zsh\n' ;; *) printf 'bash\n' ;; esac ;;
+    esac
 }
 
 # remove_rc_block — delete the marked block from the rc file, if present.
 remove_rc_block() {
     [[ -f "$RC" ]] || return 0
     if grep -qF "$MARK_BEGIN" "$RC"; then
-        local tmp mode
-        tmp="$(mktemp "${RC}.bash-scripts.XXXXXX")"
-        if ! awk -v b="$MARK_BEGIN" -v e="$MARK_END" '
+        local content
+        content="$(awk -v b="$MARK_BEGIN" -v e="$MARK_END" '
             $0==b {skip=1} skip==0 {print} $0==e {skip=0}
-        ' "$RC" > "$tmp"; then
-            rm -f -- "$tmp"
-            return 1
-        fi
-        mode="$(stat -c '%a' "$RC" 2>/dev/null || stat -f '%Lp' "$RC" 2>/dev/null || true)"
-        [[ -z "$mode" ]] || chmod "$mode" "$tmp"
-        if ! mv "$tmp" "$RC"; then
-            rm -f -- "$tmp"
-            return 1
-        fi
+        ' "$RC" && printf '\037')" || return 1
+        # The sentinel preserves trailing newlines through command substitution.
+        printf '%s' "${content%$'\037'}" > "$RC"
         msg "Removed bash-scripts block from $RC"
     fi
 }
@@ -199,18 +195,25 @@ symlink_uninstall() {
 
 # --- Completion / PATH rc block ---------------------------------------------
 build_rc_block() {
-    local kind; kind="$(rc_shell_kind)"
+    local kind quoted_repo
+    kind="$(rc_shell_kind)"
+    # Serialize a literal path inside double quotes in either supported shell.
+    quoted_repo="${REPO//\\/\\\\}"
+    quoted_repo="${quoted_repo//\"/\\\"}"
+    quoted_repo="${quoted_repo//\$/\\\$}"
+    quoted_repo="${quoted_repo//\`/\\\`}"
     if [[ "$method" == "path" ]]; then
         # shellcheck disable=SC2016  # literal $PATH is intended for the rc file
-        printf 'export PATH="%s/bin:$PATH"\n' "$REPO"
+        printf 'export PATH="%s/bin:$PATH"\n' "$quoted_repo"
     fi
     if [[ "$do_completions" == "1" ]]; then
         if [[ "$kind" == "zsh" ]]; then
+            printf 'typeset -U fpath\n'
             # shellcheck disable=SC2016  # literal $fpath is intended for the rc file
-            printf 'fpath=("%s/completions/zsh" $fpath)\n' "$REPO"
-            printf '# run compinit after this line if you have not already\n'
+            printf 'fpath=("%s/completions/zsh" $fpath)\n' "$quoted_repo"
+            printf 'autoload -Uz compinit\ncompinit -i -D\n'
         else
-            printf '[ -f "%s/completions/bash/shm-git-completion.bash" ] && source "%s/completions/bash/shm-git-completion.bash"\n' "$REPO" "$REPO"
+            printf '[ -f "%s/completions/bash/shm-git-completion.bash" ] && source "%s/completions/bash/shm-git-completion.bash"\n' "$quoted_repo" "$quoted_repo"
         fi
     fi
 }
@@ -270,6 +273,9 @@ fi
 block="$(build_rc_block)"
 if [[ -n "$block" ]]; then
     printf '%s\n' "$block" | write_rc_block
+else
+    # Reinstalling with --no-completions must remove an earlier activation.
+    remove_rc_block
 fi
 
 msg "Done. Installed via '$method'."
