@@ -107,6 +107,10 @@ done < <(git -C "$repo" status --porcelain=v1 --branch 2>/dev/null)
 
 toplevel="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null || true)"
 operation="$(git_operation "$repo")"
+if [[ "$branch" == HEAD && "$operation" == *REBASE* ]]; then
+    rebase_branch="$(git_rebase_branch "$repo")" || exit 1
+    [[ -z "$rebase_branch" ]] || branch="$rebase_branch"
+fi
 
 remote_url="$(git -C "$repo" remote get-url origin 2>/dev/null || true)"
 if [[ -n "$remote_url" ]]; then

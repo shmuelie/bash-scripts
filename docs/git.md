@@ -268,6 +268,11 @@ The mapping and opt-out options are forwarded by `git-worktree-update` and
 
 - `git` and `jq` on `PATH`.
 
+During a paused rebase, status summaries and worktree listings report the
+original branch recorded in that worktree's rebase metadata. The worktree's
+`detached` flag still reflects Git's actual HEAD state. Conflicted merges keep
+their target branch, and unrelated detached worktrees remain detached.
+
 ## JSON output
 
 `git-worktree-list`, `git-sync`, `git-worktree-update`,

@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Git status summaries and worktree listings retain the original branch during
+  a paused rebase, while preserving the actual detached HEAD state and keeping
+  unrelated detached worktrees and merge targets unchanged.
+
 ## [0.1.0] - 2026-09-18
 
 ### Changed
