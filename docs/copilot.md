@@ -150,8 +150,11 @@ timezone and date-only input means local midnight. `--older-than` takes a
 positive integer (1-999999999) with `s`, `m`, `h`, `d`, or `w`, such as `30d`.
 Days mean elapsed 24-hour periods, not calendar days. Both age cutoffs are
 exclusive and combine with AND; the age clock is sampled once per invocation.
-Missing/invalid update times never match age filters (invalid values warn);
-creation and filesystem times are never substituted. Sorting compares normalized
+Missing update times never match age filters; creation and filesystem times
+are never substituted. A malformed `created_at` **or** `updated_at` excludes
+that session from discovery and prints a visible stderr diagnostic identifying
+the session, field, and workspace file, without blocking healthy sessions.
+Missing optional timestamps remain `null`, not errors. Sorting compares normalized
 update instants, newest first, with undated sessions last.
 
 ```bash

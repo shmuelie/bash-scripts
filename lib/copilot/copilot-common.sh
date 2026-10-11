@@ -301,6 +301,21 @@ copilot_sessions() {
         s_repo="$(copilot_ws_field "$ws" repository)"
         display="$(copilot_display_name "$ws")"
 
+        local updated_epoch='' sort_key='-999999999999999999' malformed=0
+        if [[ -n "$s_created" ]] && ! copilot_timestamp "$s_created" >/dev/null; then
+            log_error "Session '$id' has invalid created_at in '$ws'."
+            malformed=1
+        fi
+        if [[ -n "$s_updated" ]]; then
+            if updated_epoch="$(copilot_timestamp "$s_updated")"; then
+                sort_key="$updated_epoch"
+            else
+                log_error "Session '$id' has invalid updated_at in '$ws'."
+                malformed=1
+            fi
+        fi
+        [[ "$malformed" == "0" ]] || continue
+
         if [[ "$all" == "0" && -z "$only_id" && -z "$recorded_cwd" && "$s_cwd" != "$cwd" ]]; then
             continue
         fi
@@ -319,14 +334,6 @@ copilot_sessions() {
         fi
         if [[ -n "$summary" ]]; then copilot_glob_matches "$display" "$summary" || continue; fi
 
-        local updated_epoch='' sort_key='-999999999999999999'
-        if [[ -n "$s_updated" ]]; then
-            if updated_epoch="$(copilot_timestamp "$s_updated")"; then
-                sort_key="$updated_epoch"
-            else
-                log_warn "Session '$id' has an invalid updated_at timestamp: $s_updated"
-            fi
-        fi
         if [[ -n "$before" ]]; then
             [[ -n "$updated_epoch" ]] || continue
             copilot_timestamp_before "$updated_epoch" "$before" || continue
