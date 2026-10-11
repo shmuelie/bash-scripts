@@ -187,3 +187,30 @@ EOF
     [ "$status" -eq 0 ]
     [ "$output" = '0 1 0 1' ]
 }
+
+@test "plugin nullable metadata and ambiguous archive or nested sources preserve port conventions" {
+    printf '[{"name":"same","marketplace":"","installedFrom":"","enabled":true,"source":"managed"}]\n' > "$RESPONSE"
+    run copilot-plugin list --json
+    [ "$status" -eq 0 ]
+    jq -e '.[0].marketplace==null and .[0].installedFrom==null' <<< "$output"
+    local source
+    for source in 'https://example.invalid/same.zip?download=1' 'owner/repo:plugins/same' '/synthetic/same///'; do
+        run copilot-plugin install "$source"
+        [ "$status" -ne 0 ]
+        [[ "$output" == *"did not report its install source"* ]]
+    done
+    ! grep -q 'plugin install' "$CALLS"
+}
+
+@test "setup rejects incomplete inventory schemas without treating unmanaged metadata as absence" {
+    cat > "$WORK/bin/copilot-plugin" <<'EOF'
+#!/usr/bin/env bash
+printf '[{"name":"same","fullName":"same"}]\n'
+EOF
+    chmod +x "$WORK/bin/copilot-plugin"
+    run bash -c '_SHM_ROOT="$1"; SHM_SETUP_BIN_DIR="$2/bin";
+        source "$1/lib/common.sh"; source "$1/lib/setup/dev-setup.sh";
+        check_plugin_resource "{\"source\":\"owner/same\"}"' _ "$REPO_ROOT" "$WORK"
+    [ "$status" -eq 2 ]
+    [ ! -e "$CALLS" ]
+}

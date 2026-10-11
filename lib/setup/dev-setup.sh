@@ -82,7 +82,11 @@ check_plugin_resource() {
         return 2
     fi
     if ! jq -e 'type == "array" and all(.[]; type == "object" and
-        (.name | type == "string") and (.fullName | type == "string"))' \
+        (.name | type == "string" and length > 0) and
+        (.fullName | type == "string" and length > 0) and
+        (.managed | type == "boolean") and (.source | type == "string" and length > 0) and
+        (.installedFrom == null or (.installedFrom | type == "string")) and
+        (.marketplace == null or (.marketplace | type == "string")))' \
         <<< "$output" >/dev/null 2>&1; then
         SETUP_MESSAGE='Invalid Copilot plugin inventory.'
         return 2

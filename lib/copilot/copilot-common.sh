@@ -104,6 +104,7 @@ copilot_plugins_json() {
         if ! normalized="$(jq -cs '
             def nonempty: type == "string" and test("\\S");
             def optional_string: . == null or type == "string";
+            def nz: if . == null or . == "" then null else . end;
             if length != 1 then error("Expected one JSON array") else .[0] end |
             if type != "array" or (all(.[];
                 type == "object" and (.name | nonempty) and (.source | nonempty) and
@@ -113,8 +114,8 @@ copilot_plugins_json() {
             then error("Invalid plugin inventory schema") else
                 map({name, fullName:(.name + (if (.marketplace // "") != ""
                     then "@" + .marketplace else "" end)),
-                    marketplace:(.marketplace // null), version:(.version // ""),
-                    enabled, source, installedFrom:(.installedFrom // null),
+                    marketplace:(.marketplace | nz), version:(.version // ""),
+                    enabled, source, installedFrom:(.installedFrom | nz),
                     managed:((.source | ascii_downcase) != "builtin" and
                         (.source | ascii_downcase) != "plugin-dir")})
             end' <<< "$output" 2>/dev/null)"; then
@@ -179,8 +180,10 @@ copilot_plugin_install_match() {
         return 0
     fi
     if [[ -z "$name" ]]; then
-        leaf="${request%%#*}"; leaf="${leaf%/}"; name="${leaf##*/}"
-        [[ "$request" != *:* || "$request" == *://* ]] || name="${request##*:}"
+        leaf="${request%%\?*}"; leaf="${leaf%%#*}"
+        [[ "$request" != *:* || "$request" == *://* ]] || leaf="${leaf##*:}"
+        while [[ "$leaf" == */ ]]; do leaf="${leaf%/}"; done
+        name="${leaf##*/}"
         name="${name%.tar.gz}"; name="${name%.zip}"; name="${name%.tgz}"; name="${name%.git}"
     fi
     if jq -e --arg name "$name" 'any(.[]; .managed == true and
