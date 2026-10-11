@@ -209,8 +209,8 @@ workspace_yaml_get() {
                     for ((j = i + 1; j < _WS_END; j++)); do
                         line="${lines[j]}"
                         block+=("$line")
-                        if [[ -n "$line" ]]; then
-                            leading="${line%%[! ]*}"
+                        if [[ -n "${line//[[:blank:]]/}" ]]; then
+                            leading="${line%%[!$' \t']*}"
                             indents+=("${#leading}")
                         fi
                     done
@@ -228,7 +228,8 @@ workspace_yaml_get() {
                     previous=''
                     for ((j = 0; j < ${#block[@]}; j++)); do
                         line="${block[j]}"
-                        [[ "$min_indent" -gt 0 ]] && line="${line:min_indent}"
+                        if [[ -z "${line//[[:blank:]]/}" ]]; then line=''
+                        elif [[ "$min_indent" -gt 0 ]]; then line="${line:min_indent}"; fi
                         if [[ "$j" -eq 0 ]]; then
                             value="$line"
                         elif [[ "$style" == '>' && -n "$previous" && -n "$line" ]]; then
@@ -292,7 +293,7 @@ _workspace_yaml_set() {
     local -a _WS_LINES=() _WS_ENDINGS=()
     local _WS_INDEX _WS_INDENT _WS_KEY _WS_VALUE _WS_END _WS_BLOCK
     _workspace_yaml_load "$file"
-    local line existing replacement ending=$'\n'
+    local line existing replacement replacement_ending ending=$'\n'
     for ending in "${_WS_ENDINGS[@]}"; do [[ -z "$ending" ]] || break; done
     [[ -n "$ending" ]] || ending=$'\n'
     local i
@@ -306,7 +307,11 @@ _workspace_yaml_set() {
                 else
                     replacement="${values[$existing]}"
                 fi
-                printf '%s%s: %s%s' "$_WS_INDENT" "$existing" "$replacement" "${_WS_ENDINGS[i]}" >> "$output"
+                replacement_ending="${_WS_ENDINGS[i]}"
+                if [[ "$_WS_END" -eq ${#_WS_LINES[@]} ]]; then
+                    replacement_ending="${_WS_ENDINGS[-1]}"
+                fi
+                printf '%s%s: %s%s' "$_WS_INDENT" "$existing" "$replacement" "$replacement_ending" >> "$output"
                 written["$existing"]=1
                 i=$((_WS_END - 1))
                 continue
@@ -335,7 +340,10 @@ _workspace_yaml_set() {
         fi
         printf '%s: %s%s' "$key" "$replacement" "$ending" >> "$output"
     done
-    mv -- "$output" "$file"
+    if ! mv -- "$output" "$file"; then
+        rm -f -- "$output"
+        return 1
+    fi
 }
 
 workspace_yaml_set_strings() {

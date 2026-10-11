@@ -106,3 +106,15 @@ PY
     workspace_yaml_set_strings "$WS" branch main
     [ "$(cat "$WS")" = $'summary: |\n  branch: fake\nname: Real\nbranch: "main"' ]
 }
+
+@test "tabs blank scalar lines and final unterminated blocks retain correct boundaries" {
+    printf '\tname: |-\r\t\tfirst\r\t\t\r\t\tbranch: fake\r\tbranch: main\r\tsummary: |\r\t\tlast' > "$WS"
+    [ "$(workspace_yaml_get "$WS" name)" = $'first\n\nbranch: fake' ]
+    [ "$(workspace_yaml_get "$WS" branch)" = main ]
+    workspace_yaml_set_strings "$WS" summary Short
+    python - "$WS" <<'PY'
+import sys
+from pathlib import Path
+assert Path(sys.argv[1]).read_bytes() == b'\tname: |-\r\t\tfirst\r\t\t\r\t\tbranch: fake\r\tbranch: main\r\tsummary: "Short"'
+PY
+}

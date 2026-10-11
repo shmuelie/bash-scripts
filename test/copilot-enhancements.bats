@@ -275,12 +275,12 @@ EOF
 @test "merge final metadata repair failures clean the partial destination" {
     make_merge_session first 2026-01-01T00:00:00Z
     make_merge_session second 2026-02-01T00:00:00Z
-    cat > "$WORK/stub/mktemp" <<'EOF'
+    cat > "$WORK/stub/mv" <<'EOF'
 #!/usr/bin/env bash
 printf 'forced final metadata repair failure\n' >&2
 exit 1
 EOF
-    chmod +x "$WORK/stub/mktemp"
+    chmod +x "$WORK/stub/mv"
 
     run copilot-session-maintenance merge first second --remove-source
     [ "$status" -ne 0 ]
