@@ -17,7 +17,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --) args+=("$1"); saw_ddash=1; shift ;;
         --json) want_json=1; shift ;;
-        --selector|--resume-session|--usage-output-file|--enable-mcp-server|--disable-mcp-server|--additional-mcp-config|--mcp-github-auth|--name|--session-id|--model|--reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format|-C|--change-dir)
+        --selector|--resume-session|--usage-output-file|--enable-mcp-server|--disable-mcp-server|--additional-mcp-config|--mcp-github-auth|--prompt|-p|--interactive|-i|--auto-tier|--dynamic-retrieval|--mouse|--prefer-version|--name|--session-id|--model|--reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format|-C|--change-dir)
             args+=("$1")
             shift
             if [[ $# -gt 0 ]]; then args+=("$1"); shift; fi
@@ -30,7 +30,7 @@ build_launch_plan "${args[@]}" || exit $?
 
 if [[ "$want_json" == "1" ]]; then
     require_cmd jq
-    { printf '%s\0' "${COPILOT_ARGS[@]}"; printf 'x'; } | jq -R -s \
+    { if [[ ${#COPILOT_ARGS[@]} -gt 0 ]]; then printf '%s\0' "${COPILOT_ARGS[@]}"; fi; printf 'x'; } | jq -R -s \
         --arg exe "$COPILOT_EXE" \
         --argjson passthrough "$([[ "$COPILOT_PASSTHROUGH" == "1" ]] && echo true || echo false)" \
         '{exe:$exe, passthrough:$passthrough,
