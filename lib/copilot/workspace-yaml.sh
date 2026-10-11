@@ -78,28 +78,93 @@ _workspace_yaml_decode_double() {
     return 1
 }
 
-workspace_yaml_has() {
-    local file="$1" key="$2" line
-    [[ -f "$file" ]] || return 1
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        line="${line%$'\r'}"
-        [[ "$line" =~ ^${key}:[[:space:]]* ]] && return 0
-    done < "$file"
+# Keep physical line endings separate so untouched metadata is copied verbatim.
+_workspace_yaml_load() {
+    local file="$1" text='' line ending
+    _WS_LINES=(); _WS_ENDINGS=()
+    IFS= read -r -d '' text < "$file" || true
+    while [[ -n "$text" ]]; do
+        line="${text%%[$'\r\n']*}"
+        text="${text:${#line}}"
+        ending=''
+        case "$text" in
+            $'\r\n'*) ending=$'\r\n' ;;
+            $'\r'*) ending=$'\r' ;;
+            $'\n'*) ending=$'\n' ;;
+        esac
+        text="${text:${#ending}}"
+        _WS_LINES+=("$line"); _WS_ENDINGS+=("$ending")
+    done
+}
+
+# Shared boundary used by lookup, decoding, and replacement.
+_workspace_yaml_mapping() {
+    local index="$1"
+    [[ "${_WS_LINES[index]}" =~ ^([[:blank:]]*)([A-Za-z0-9_]+)[[:blank:]]*:[[:blank:]]*(.*)$ ]] || return 1
+    _WS_INDENT="${BASH_REMATCH[1]}"
+    _WS_KEY="${BASH_REMATCH[2]}"
+    _WS_VALUE="${BASH_REMATCH[3]}"
+    _WS_END=$((index + 1))
+    _WS_BLOCK=0
+    if [[ "$_WS_VALUE" =~ ^[\|\>]([-+][1-9]?|[1-9][-+]?|)[[:blank:]]*(#.*)?$ ]]; then
+        _WS_BLOCK=1
+        local line leading
+        while (( _WS_END < ${#_WS_LINES[@]} )); do
+            line="${_WS_LINES[_WS_END]}"
+            if [[ -n "${line//[[:blank:]]/}" ]]; then
+                leading="${line%%[!$' \t']*}"
+                (( ${#leading} > ${#_WS_INDENT} )) || break
+            fi
+            _WS_END=$((_WS_END + 1))
+        done
+    elif [[ "$_WS_VALUE" == \'* || "$_WS_VALUE" == \"* ]]; then
+        local scalar="$_WS_VALUE" decoder='_workspace_yaml_decode_single'
+        [[ "$_WS_VALUE" != \"* ]] || decoder='_workspace_yaml_decode_double'
+        while ! "$decoder" "$scalar" >/dev/null 2>&1 && (( _WS_END < ${#_WS_LINES[@]} )); do
+            line="${_WS_LINES[_WS_END]}"
+            leading="${line%%[!$' \t']*}"
+            [[ -z "${line//[[:blank:]]/}" ]] || (( ${#leading} > ${#_WS_INDENT} )) || break
+            scalar+=$'\n'"$line"
+            _WS_END=$((_WS_END + 1))
+        done
+    fi
+}
+
+_workspace_yaml_find() {
+    local key="$1" i
+    for ((i = 0; i < ${#_WS_LINES[@]}; i++)); do
+        _workspace_yaml_mapping "$i" || continue
+        if [[ "$_WS_KEY" == "$key" ]]; then
+            _WS_INDEX="$i"
+            return 0
+        fi
+        i=$((_WS_END - 1))
+    done
     return 1
+}
+
+workspace_yaml_has() {
+    [[ -f "$1" ]] || return 1
+    local -a _WS_LINES=() _WS_ENDINGS=()
+    local _WS_INDEX _WS_INDENT _WS_KEY _WS_VALUE _WS_END _WS_BLOCK
+    _workspace_yaml_load "$1"
+    _workspace_yaml_find "$2"
 }
 
 workspace_yaml_get() {
     local file="$1" key="$2"
     [[ -f "$file" ]] || return 0
 
-    local -a lines=()
-    mapfile -t lines < "$file"
+    local -a _WS_LINES=() _WS_ENDINGS=()
+    local _WS_INDEX _WS_INDENT _WS_KEY _WS_VALUE _WS_END _WS_BLOCK
+    _workspace_yaml_load "$file"
+    _workspace_yaml_find "$key" || return 0
+    local -a lines=("${_WS_LINES[@]}")
     local line rest style modifiers indent='' chomp='' value='' previous='' scalar=''
     local i j leading min_indent=0 explicit_indent=0
-    for ((i = 0; i < ${#lines[@]}; i++)); do
-        line="${lines[i]%$'\r'}"
-        if [[ "$line" =~ ^${key}:[[:space:]]*(.*)$ ]]; then
-            rest="${BASH_REMATCH[1]}"
+    for ((i = _WS_INDEX; i <= _WS_INDEX; i++)); do
+        if [[ "$_WS_KEY" == "$key" ]]; then
+            rest="$_WS_VALUE"
             rest="$(_workspace_yaml_trim "$rest")"
             case "${rest:0:1}" in
                 "'"|'"')
@@ -110,7 +175,7 @@ workspace_yaml_get() {
                         else
                             _workspace_yaml_decode_double "$scalar" >/dev/null 2>&1 && break
                         fi
-                        line="${lines[j]%$'\r'}"
+                        line="${lines[j]}"
                         [[ -z "$line" || "$line" == [[:space:]]* ]] || break
                         line="$(_workspace_yaml_trim "$line")"
                         if [[ "$scalar" == *\\ && "$scalar" != *\\\\ ]]; then
@@ -141,19 +206,16 @@ workspace_yaml_get() {
                     fi
 
                     local -a block=() indents=()
-                    for ((j = i + 1; j < ${#lines[@]}; j++)); do
-                        line="${lines[j]%$'\r'}"
-                        if [[ -n "$line" && "$line" != [[:space:]]* ]]; then
-                            break
-                        fi
+                    for ((j = i + 1; j < _WS_END; j++)); do
+                        line="${lines[j]}"
                         block+=("$line")
-                        if [[ -n "$line" ]]; then
-                            leading="${line%%[! ]*}"
+                        if [[ -n "${line//[[:blank:]]/}" ]]; then
+                            leading="${line%%[!$' \t']*}"
                             indents+=("${#leading}")
                         fi
                     done
                     if [[ "$explicit_indent" -gt 0 ]]; then
-                        min_indent="$explicit_indent"
+                        min_indent=$((${#_WS_INDENT} + explicit_indent))
                     else
                         for indent in "${indents[@]}"; do
                             if [[ "$min_indent" -eq 0 || "$indent" -lt "$min_indent" ]]; then
@@ -166,7 +228,8 @@ workspace_yaml_get() {
                     previous=''
                     for ((j = 0; j < ${#block[@]}; j++)); do
                         line="${block[j]}"
-                        [[ "$min_indent" -gt 0 ]] && line="${line:min_indent}"
+                        if [[ -z "${line//[[:blank:]]/}" ]]; then line=''
+                        elif [[ "$min_indent" -gt 0 ]]; then line="${line:min_indent}"; fi
                         if [[ "$j" -eq 0 ]]; then
                             value="$line"
                         elif [[ "$style" == '>' && -n "$previous" && -n "$line" ]]; then
@@ -225,34 +288,43 @@ _workspace_yaml_set() {
         values["$key"]="$value"
     done
 
-    local tmp
-    tmp="$(mktemp "${file}.shm.XXXXXX")"
-    : > "$tmp"
-    local -a lines=()
-    mapfile -t lines < "$file"
-    local line existing replacement
+    local output="${file}.shm.$$.$RANDOM"
+    (set -o noclobber; : > "$output") || return 1
+    local -a _WS_LINES=() _WS_ENDINGS=()
+    local _WS_INDEX _WS_INDENT _WS_KEY _WS_VALUE _WS_END _WS_BLOCK
+    _workspace_yaml_load "$file"
+    local line existing replacement replacement_ending ending=$'\n'
+    for ending in "${_WS_ENDINGS[@]}"; do [[ -z "$ending" ]] || break; done
+    [[ -n "$ending" ]] || ending=$'\n'
     local i
-    for ((i = 0; i < ${#lines[@]}; i++)); do
-        line="${lines[i]%$'\r'}"
-        if [[ "$line" =~ ^([A-Za-z0-9_]+): ]]; then
-            existing="${BASH_REMATCH[1]}"
+    for ((i = 0; i < ${#_WS_LINES[@]}; i++)); do
+        line="${_WS_LINES[i]}"
+        if _workspace_yaml_mapping "$i"; then
+            existing="$_WS_KEY"
             if [[ -n "${values[$existing]+x}" ]]; then
                 if [[ "$mode" == 'string' ]]; then
                     replacement="$(_workspace_yaml_quote "${values[$existing]}")"
                 else
                     replacement="${values[$existing]}"
                 fi
-                printf '%s: %s\n' "$existing" "$replacement" >> "$tmp"
+                replacement_ending="${_WS_ENDINGS[i]}"
+                if [[ "$_WS_END" -eq ${#_WS_LINES[@]} ]]; then
+                    replacement_ending="${_WS_ENDINGS[-1]}"
+                fi
+                printf '%s%s: %s%s' "$_WS_INDENT" "$existing" "$replacement" "$replacement_ending" >> "$output"
                 written["$existing"]=1
-                while ((i + 1 < ${#lines[@]})); do
-                    line="${lines[i+1]%$'\r'}"
-                    [[ -z "$line" || "$line" == [[:space:]]* ]] || break
-                    i=$((i + 1))
-                done
+                i=$((_WS_END - 1))
                 continue
             fi
+            # Copy unmodified block bodies without considering their text fields.
+            while ((i < _WS_END)); do
+                printf '%s%s' "${_WS_LINES[i]}" "${_WS_ENDINGS[i]}" >> "$output"
+                i=$((i + 1))
+            done
+            i=$((i - 1))
+            continue
         fi
-        printf '%s\n' "$line" >> "$tmp"
+        printf '%s%s' "$line" "${_WS_ENDINGS[i]}" >> "$output"
     done
 
     for key in "${!values[@]}"; do
@@ -262,9 +334,16 @@ _workspace_yaml_set() {
         else
             replacement="${values[$key]}"
         fi
-        printf '%s: %s\n' "$key" "$replacement" >> "$tmp"
+        if [[ ${#_WS_LINES[@]} -gt 0 && -z "${_WS_ENDINGS[-1]}" ]]; then
+            printf '%s' "$ending" >> "$output"
+            _WS_ENDINGS[-1]="$ending"
+        fi
+        printf '%s: %s%s' "$key" "$replacement" "$ending" >> "$output"
     done
-    mv -- "$tmp" "$file"
+    if ! mv -- "$output" "$file"; then
+        rm -f -- "$output"
+        return 1
+    fi
 }
 
 workspace_yaml_set_strings() {

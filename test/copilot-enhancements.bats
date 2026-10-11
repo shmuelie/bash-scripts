@@ -133,6 +133,7 @@ EOF
     export PICKER_LOG="$WORK/picker"
     cat > "$WORK/stub/fzf" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$@" > "$PICKER_LOG.args"
 cat > "$PICKER_LOG"
 sed -n '2p' "$PICKER_LOG"
 EOF
@@ -140,8 +141,11 @@ EOF
 
     run bash -c "cd '$WORK' && copilot-session select --stay-in-directory"
     [ "$status" -eq 0 ]
-    grep -Fq 'Newer | owner/new | main' "$PICKER_LOG"
-    grep -Fq "$SESSION_CWD | 2026-02-01T00:00:00Z | events: 4" "$PICKER_LOG"
+    grep -Fq 'A - Newer' "$PICKER_LOG"
+    grep -Fq 'Repository: owner/new' "$PICKER_LOG.args"
+    grep -Fq "Cwd: $SESSION_CWD" "$PICKER_LOG.args"
+    grep -Fq 'Updated: 2026-02-01T00:00:00Z' "$PICKER_LOG.args"
+    grep -Fq 'Events: 4' "$PICKER_LOG.args"
     grep -Fxq "cwd=$WORK" "$COPILOT_RECORD"
     grep -Fxq 'arg=older' "$COPILOT_RECORD"
 }
@@ -275,12 +279,12 @@ EOF
 @test "merge final metadata repair failures clean the partial destination" {
     make_merge_session first 2026-01-01T00:00:00Z
     make_merge_session second 2026-02-01T00:00:00Z
-    cat > "$WORK/stub/mktemp" <<'EOF'
+    cat > "$WORK/stub/mv" <<'EOF'
 #!/usr/bin/env bash
 printf 'forced final metadata repair failure\n' >&2
 exit 1
 EOF
-    chmod +x "$WORK/stub/mktemp"
+    chmod +x "$WORK/stub/mv"
 
     run copilot-session-maintenance merge first second --remove-source
     [ "$status" -ne 0 ]

@@ -5,6 +5,7 @@
 #   COPILOT_EXE          resolved copilot executable
 #   COPILOT_ARGS         array of arguments
 #   COPILOT_PASSTHROUGH  1 when the prompt is a passthrough command (update/help)
+#   COPILOT_CWD          absolute effective planning/native directory
 #
 # Source lib/common.sh and lib/copilot/copilot-common.sh first.
 
@@ -107,11 +108,10 @@ _shm_is_ignored_name() {
 # Uses the parsed resume flags in the caller's scope.
 _shm_resolve_resume() {
     local resume_latest="$1" show_picker="$2" include_unnamed="$3" selector="$4"
-    local cwd branch
-    cwd="$(pwd -P)"
-    branch="$(copilot_current_branch)"
+    local _SCOPE_CWD _SCOPE_REPOSITORY _SCOPE_BRANCH
+    copilot_session_scope
 
-    # Collect cwd-filtered sessions (newest first), dropping ignored/undated ones.
+    # Collect scoped sessions (newest first), dropping ignored/undated ones.
     local ids=() names=() branches=() candidate_rows=() sessions_out
     sessions_out="$(copilot_sessions)" || return 1
     local id display s_cwd s_branch s_repo created updated ecount esize path
@@ -126,11 +126,28 @@ _shm_resolve_resume() {
     local count=${#ids[@]}
     [[ "$count" -eq 0 ]] && return 0
 
-    # Prefer sessions matching the current git branch, if any match.
-    if [[ -n "$branch" ]]; then
+    # Prefer complete origin/branch matches over directory-only legacy sessions.
+    if [[ -n "$_SCOPE_REPOSITORY" && -n "$_SCOPE_BRANCH" ]]; then
+        local identity_rows=() identity_ids=() identity_names=() identity_branches=() i
+        for i in "${!ids[@]}"; do
+            IFS="$SHM_FS" read -r id display s_cwd s_branch s_repo created updated ecount esize path <<<"${candidate_rows[i]}"
+            if [[ -n "$s_repo" && "${s_repo,,}" == "${_SCOPE_REPOSITORY,,}" ]] &&
+               test "$s_branch" = "$_SCOPE_BRANCH"; then
+                identity_ids+=("${ids[i]}"); identity_names+=("${names[i]}")
+                identity_branches+=("${branches[i]}"); identity_rows+=("${candidate_rows[i]}")
+            fi
+        done
+        if [[ ${#identity_ids[@]} -gt 0 ]]; then
+            ids=("${identity_ids[@]}"); names=("${identity_names[@]}")
+            branches=("${identity_branches[@]}"); candidate_rows=("${identity_rows[@]}")
+        fi
+    fi
+
+    # Retain branch preference for incomplete directory-only metadata.
+    if [[ -n "$_SCOPE_BRANCH" ]]; then
         local m_ids=() m_names=() m_branches=() m_rows=() i
         for i in "${!ids[@]}"; do
-            if [[ "${branches[$i]}" == "$branch" ]]; then
+            if test "${branches[$i]}" = "$_SCOPE_BRANCH"; then
                 m_ids+=("${ids[$i]}"); m_names+=("${names[$i]}"); m_branches+=("${branches[$i]}")
                 m_rows+=("${candidate_rows[$i]}")
             fi
@@ -180,51 +197,32 @@ _shm_resolve_resume() {
     fi
 }
 
-# _shm_session_picker IDS_ARRAY NAMES_ARRAY — show a picker and echo the chosen id
-# (empty for "New session"). Uses fzf/select via pick_one on labels.
+# _shm_session_picker IDS_ARRAY NAMES_ARRAY ROWS_ARRAY SELECTOR — value-only picker.
 _shm_session_picker() {
     if [[ -n "$4" ]]; then
         copilot_select_callback "$4" "$3"
         return $?
     fi
-    local -n _ids="$1"; local -n _names="$2"
-    local labels=() i
-    for i in "${!_ids[@]}"; do
-        labels+=("$((i + 1))) ${_names[$i]}  [${_ids[$i]:0:8}]")
-    done
-    labels+=("N) New session")
-    local choice
-    choice="$(printf '%s\n' "${labels[@]}" | pick_one 'Session')" || {
-        log_error 'No Copilot session selected.'
-        return 1
-    }
-    [[ -z "$choice" || "$choice" == 'N) New session' ]] && return 0
-    # Map the chosen label back to its index.
-    for i in "${!labels[@]}"; do
-        if [[ "${labels[$i]}" == "$choice" ]]; then
-            [[ "$i" -lt "${#_ids[@]}" ]] && printf '%s\n' "${_ids[$i]}"
-            return 0
-        fi
-    done
+    copilot_paginated_picker "$3"
 }
 
 # build_launch_plan ARGS... — parse arguments and populate COPILOT_EXE/ARGS/PASSTHROUGH.
 build_launch_plan() {
     # These globals are consumed by start-copilot and copilot-launch-plan.
     # shellcheck disable=SC2034
-    COPILOT_EXE="$(resolve_copilot)"
+    COPILOT_EXE=''
     COPILOT_ARGS=()
     # shellcheck disable=SC2034
     COPILOT_PASSTHROUGH=0
 
-    local prompt='' name='' selector='' interactive=''
+    local prompt='' name='' selector='' interactive='' change_dir='' change_index=-1
     local no_resume=0 resume_latest=0 resume_session='' show_picker=0 include_unnamed=0 defer_resume=0
     local session_id_present=0
     local no_allow_all=0 no_experimental=0 no_deny=0
     local assisted_approval=0
     local additional_mcp=() mcp_github_auth=()
     local fleet=0 auto_tier='' model='' no_mouse=0 mouse_present=0 no_eager_powershell=0 prefer_version=0
-    local enable_mcp=() disable_mcp=() fwd=() passthrough_args=() saw_ddash=0
+    local enable_mcp=() disable_mcp=() fwd=() passthrough_args=() change_indices=() saw_ddash=0
 
     while [[ $# -gt 0 ]]; do
         if [[ "$saw_ddash" == "1" ]]; then
@@ -318,7 +316,18 @@ build_launch_plan() {
             --model)
                 [[ $# -ge 2 ]] || die '--model requires a value.'
                 model="$2"; fwd+=("$1" "$2"); shift 2 ;;
-            --reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format|-C|--change-dir)
+            -C|--change-dir)
+                [[ $# -ge 2 && -n "$2" ]] || { log_error "$1 requires a value (an existing directory)."; return 1; }
+                change_dir="$2"; change_index=${#fwd[@]}
+                change_indices+=("$change_index")
+                fwd+=("$1" "$2"); shift 2 ;;
+            --change-dir=*)
+                change_dir="${1#*=}"
+                [[ -n "$change_dir" ]] || { log_error '--change-dir requires an existing directory.'; return 1; }
+                change_index=${#fwd[@]}
+                change_indices+=("$change_index")
+                fwd+=(--change-dir "$change_dir"); shift ;;
+            --reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format)
                 [[ $# -ge 2 ]] || die "$1 requires a value."
                 fwd+=("$1" "$2"); shift 2 ;;
             --plan) fwd+=("$1"); shift ;;
@@ -327,6 +336,19 @@ build_launch_plan() {
             *) if [[ -z "$prompt" ]]; then prompt="$1"; else fwd+=("$1"); fi; shift ;;
         esac
     done
+
+    # Resolve relative paths once, while the caller remains in its original cwd.
+    COPILOT_CWD="$(cd -- "${change_dir:-.}" 2>/dev/null && pwd -P)" || {
+        log_error "Change directory must be an existing filesystem directory: '$change_dir'."
+        return 1
+    }
+    # shellcheck disable=SC2034  # consumed by launchers after planning
+    COPILOT_EXE="$(cd -- "$COPILOT_CWD" && {
+        local exe
+        exe="$(resolve_copilot)" || return 1
+        if [[ "$exe" == /* ]]; then printf '%s\n' "$exe"
+        else readlink -f -- "$exe"; fi
+    })" || return 1
 
     if [[ "$assisted_approval" == "1" && "$no_experimental" == "1" ]]; then
         log_warn '--assisted-approval may not work with --no-experimental.'
@@ -360,7 +382,19 @@ build_launch_plan() {
     fi
 
     if [[ ${#mcp_github_auth[@]} -gt 0 ]]; then
-        _shm_validate_mcp_github_auth additional_mcp mcp_github_auth || return $?
+        (cd -- "$COPILOT_CWD" &&
+            _shm_validate_mcp_github_auth additional_mcp mcp_github_auth) || return $?
+    fi
+    if [[ "$change_index" -ge 0 ]]; then
+        fwd[change_index+1]="$COPILOT_CWD"
+        # Repeated directory flags resolve from the caller, never sequentially.
+        local i
+        for i in "${change_indices[@]}"; do
+            if [[ "$i" -ne "$change_index" ]]; then
+                unset 'fwd[i]' 'fwd[i+1]'
+            fi
+        done
+        fwd=("${fwd[@]}")
     fi
 
     # Defaults.
@@ -388,7 +422,8 @@ build_launch_plan() {
         COPILOT_ARGS+=(--resume "$resume_session"); resumed=1
     elif [[ "$no_resume" == "0" && "$defer_resume" == "0" && "$session_id_present" == "0" ]]; then
         local chosen
-        chosen="$(_shm_resolve_resume "$resume_latest" "$show_picker" "$include_unnamed" "$selector")" || return $?
+        chosen="$(cd -- "$COPILOT_CWD" &&
+            _shm_resolve_resume "$resume_latest" "$show_picker" "$include_unnamed" "$selector")" || return $?
         if [[ -n "$chosen" ]]; then
             log_verbose "Resuming session: $chosen"
             COPILOT_ARGS+=(--resume "$chosen"); resumed=1
@@ -442,7 +477,8 @@ copilot_preview_args() {
 _shm_apply_mcp_autoconnect() {
     local -n _enable="$1"; local -n _disable="$2"
     local cfg; cfg="$(copilot_home)/mcp-config.json"
-    local cwd; cwd="$(pwd -P)"
+    local cwd; cwd="${COPILOT_CWD:-$(pwd -P)}"
+    [[ "$cfg" == /* ]] || cfg="$cwd/$cfg"
 
     if [[ -f "$cfg" ]] && have_cmd jq; then
         declare -A in_enable=()

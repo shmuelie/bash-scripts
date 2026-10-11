@@ -19,7 +19,7 @@ executable in `bin/`.
 
 Wraps `copilot` and adds:
 
-- **Automatic session resume** for the current folder — a single session
+- **Automatic session resume** for the current repository/branch — a single session
   resumes automatically, multiple show a picker, and a lone named session
   auto-resumes. Control it with `--no-resume`, `--resume-latest`,
   `--resume-session <id>`, `--no-auto-resume`, and `--include-unnamed`.
@@ -134,15 +134,36 @@ than installing or registering something based on a failed lookup.
 
 ## Session discovery and filtering
 
-`copilot-session list` defaults to the current directory; `--all` is explicit
+`copilot-session list` defaults to the single GitHub `origin` repository and
+the exact checked-out branch, so sessions remain visible after worktree moves.
+HTTPS, SCP-style SSH, and `ssh://git@github.com/` origins normalize to
+`owner/repository` (case-insensitive repository identity; case-sensitive branch).
+Both session identity fields must be present to match across directories.
+Incomplete metadata and unresolved current identity fall back to the recorded
+current directory, but any known conflicting repository/branch excludes a
+candidate. Automatic resume prefers complete identity matches over local legacy
+candidates and preserves newest-first ordering within that set.
+Multiple origins and unsupported remotes do not establish a repository identity.
+Detached HEAD cannot establish a complete scope, but a known origin still
+excludes conflicting repositories during directory fallback. `--all` is explicit
 global discovery and `--id` remains an exact, directory-independent lookup.
 List and select share case-insensitive `--repository`, `--branch`, `--cwd`,
 and `--summary` glob filters, combined with AND. An explicit `--cwd` replaces
 the implicit current-directory scope and matches recorded paths literally
 (without resolving or normalizing them). Repository/branch/summary filters
-alone do not expand local discovery. Missing repository, branch, or directory
+alone do not expand the implicit scope. Missing repository, branch, or directory
 metadata never matches an explicit filter, even `*`. Summary means the displayed
 name, then legacy summary, then `(no summary)`.
+
+Azure DevOps origins also normalize to `organization/project/repository`:
+`https://dev.azure.com/org/project/_git/repo`,
+`https://org.visualstudio.com/project/_git/repo`, and
+`git@ssh.dev.azure.com:v3/org/project/repo` (or its `ssh://` spelling).
+HTTPS may include `DefaultCollection/`; encoded project/repository names and an
+optional `.git` suffix are supported. Invalid escapes, extra path segments,
+credentials/query/fragment components, decoded separators/control characters,
+and ambiguous or multiple origins fail closed to local-directory discovery.
+Normalization uses Node (v12 or newer) without network access.
 
 `--updated-before` accepts an ISO 8601 date or timestamp. `Z` or an explicit
 `+HH:MM`/`-HH:MM` offset identifies an instant; omitted offsets use the local
@@ -150,8 +171,11 @@ timezone and date-only input means local midnight. `--older-than` takes a
 positive integer (1-999999999) with `s`, `m`, `h`, `d`, or `w`, such as `30d`.
 Days mean elapsed 24-hour periods, not calendar days. Both age cutoffs are
 exclusive and combine with AND; the age clock is sampled once per invocation.
-Missing/invalid update times never match age filters (invalid values warn);
-creation and filesystem times are never substituted. Sorting compares normalized
+Missing update times never match age filters; creation and filesystem times
+are never substituted. A malformed `created_at` **or** `updated_at` excludes
+that session from discovery and prints a visible stderr diagnostic identifying
+the session, field, and workspace file, without blocking healthy sessions.
+Missing optional timestamps remain `null`, not errors. Sorting compares normalized
 update instants, newest first, with undated sessions last.
 
 ```bash
@@ -179,7 +203,19 @@ copilot-session select --stay-in-directory "continue" -- --model fast
 copilot-session select --dry-run --first 1
 ```
 
-Multiple matches use the configured fzf/console picker. Dry-run requires the
+Multiple matches use the configured fzf/console picker with **22 sessions per
+page**, descriptive summaries, and single-letter keys. `M` moves forward,
+`P` moves back, `N` starts new, and `C` cancels (status 130); new and cancel are
+available on every page. No blank/numeric input selects a default. Console
+`?` shows full page details and `?A` shows one session's full name, ID, repository,
+branch, directory, update time, and event count; fzf shows that context in its
+header and initially focuses the help action, not a default session. Labels
+sanitize terminal controls and line separators and retain up to
+80 Unicode text elements including `...`. Only duplicate displayed names
+(including truncation collisions) receive branch suffixes, computed across all
+pages. Literal ampersands remain session data; shortcuts always map to the
+original session ID, not the displayed label.
+Dry-run requires the
 filters or `--first 1` to resolve exactly one session and never opens a picker.
 
 ### Replaceable session picker
@@ -205,8 +241,9 @@ introduce no UI dependency. The default fzf/console picker remains available;
 an unavailable console or failed picker aborts instead of silently launching.
 
 Launchers call the selector **only when existing resume policy needs a picker**:
-folder/branch preference, ignored names, unnamed filtering, automatic single
-session and lone named-session resume, `--resume-latest`, explicit resume,
+origin/branch identity and legacy-directory preference, ignored names, unnamed
+filtering, automatic single session and lone named-session resume,
+`--resume-latest`, explicit resume,
 `--session-id`, `--no-resume`, and `--defer-resume` still apply. Selection changes
 only resume, not model, MCP, deny-tool, or passthrough arguments.
 Global `select` calls a supplied selector even for one candidate, after shared
@@ -229,8 +266,15 @@ start-copilot --no-auto-resume --selector ./choose-session --model fast
 
 ## Directory changes
 
-`start-copilot` runs in place. `copilot-session resume` execs `copilot`
-directly.
+`start-copilot -C <directory>` (also `--change-dir`) resolves a relative target
+once against the caller and requires an existing filesystem directory.
+Session/branch selection, selector callbacks, executable discovery (including
+relative PATH entries), and MCP path policy use that effective directory,
+including preview and plan-only calls. Planning never changes the caller's
+directory, even on errors or cancellation. Normal launch arguments contain one
+absolute native directory option; help/update retain their passthrough spelling.
+The JSON launch plan includes `cwd`, the absolute effective directory.
+`copilot-session resume` execs `copilot` directly.
 
 ### Terminal lifecycle
 
@@ -264,6 +308,10 @@ where the Copilot CLI runs.
 Workspace scalar fields are decoded from plain, single-line or multiline
 quoted, literal-block, and folded-block YAML. Rename and merge operations safely
 quote updated values while preserving unrelated workspace metadata.
+Lookup and rewriting share block boundaries: mapping-looking text within a
+literal/folded scalar never shadows real fields. LF, CRLF, and CR line endings
+and the indentation of untouched fields are retained, including when a
+multiline name is renamed back to one line.
 
 ```bash
 copilot-session list --json
@@ -304,4 +352,5 @@ checkpoint bodies.
 ## Requirements
 
 - `copilot` and `jq` on `PATH`.
-- `node` for the session-maintenance subcommands.
+- `node` (v12 or newer) for the native session picker, Azure origin
+  normalization, and session-maintenance subcommands.

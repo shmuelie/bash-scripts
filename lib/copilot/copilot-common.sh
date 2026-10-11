@@ -210,10 +210,10 @@ copilot_ws_name() {
 copilot_display_name() {
     local file="$1" name summary
     name="$(copilot_ws_name "$file")"
-    name="${name//$'\n'/ }"
+    name="${name//[[:cntrl:]]/ }"
     if [[ -n "$name" ]]; then printf '%s\n' "$name"; return; fi
     summary="$(copilot_ws_field "$file" summary)"
-    summary="${summary//$'\n'/ }"
+    summary="${summary//[[:cntrl:]]/ }"
     if [[ -n "$summary" ]]; then printf '%s\n' "$summary"; return; fi
     printf '%s\n' '(no summary)'
 }
@@ -243,11 +243,52 @@ copilot_timestamp_before() {
        (${left%.*} == ${right%.*} && 10#${left#*.} < 10#${right#*.}) ))
 }
 
+# Identity resolution is deliberately limited to one unambiguous origin URL.
+copilot_origin_identity() {
+    local url="${1,,}" owner repository
+    if [[ "$url" =~ ^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)([a-z0-9_.-]+)/([a-z0-9_.-]+)/?$ ]]; then
+        owner="${BASH_REMATCH[2]}"
+        repository="${BASH_REMATCH[3]%.git}"
+        [[ -n "$repository" && "$repository" != '.' && "$repository" != '..' &&
+           "$owner" != '.' && "$owner" != '..' ]] || return 1
+        printf '%s/%s\n' "$owner" "$repository"
+        return 0
+    fi
+    if have_cmd node; then
+        printf '%s' "$1" | node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/repository-identity.js"
+        return $?
+    fi
+    return 1
+}
+
+# Populate caller-local scope variables; no directory changes or remote access.
+copilot_session_scope() {
+    _SCOPE_CWD="$(pwd -P)"
+    _SCOPE_BRANCH="$(copilot_current_branch)"
+    _SCOPE_REPOSITORY=''
+    local -a urls=()
+    mapfile -t urls < <(git config --get-all remote.origin.url 2>/dev/null || true)
+    if [[ ${#urls[@]} -eq 1 ]]; then
+        _SCOPE_REPOSITORY="$(copilot_origin_identity "${urls[0]}")" || _SCOPE_REPOSITORY=''
+    fi
+}
+
+copilot_session_in_scope() {
+    local cwd="$1" repository="$2" branch="$3"
+    if [[ -n "$_SCOPE_REPOSITORY" && -n "$repository" &&
+          "${repository,,}" != "${_SCOPE_REPOSITORY,,}" ]]; then return 1; fi
+    if [[ -n "$_SCOPE_BRANCH" && -n "$branch" ]] &&
+       ! test "$branch" = "$_SCOPE_BRANCH"; then return 1; fi
+    if [[ -n "$_SCOPE_REPOSITORY" && -n "$_SCOPE_BRANCH" &&
+          -n "$repository" && -n "$branch" ]]; then return 0; fi
+    test "$cwd" = "$_SCOPE_CWD"
+}
+
 # copilot_sessions [--all] [--id ID] [filters] — emit SHM_FS rows, newest first:
 #   id  display  cwd  branch  repository  created  updated  eventCount  eventSize  path
-# Ported from Get-CopilotSession. Without --all or --id, filters to the current cwd.
+# Without --all, --id, or --cwd, use origin/branch identity with legacy cwd fallback.
 copilot_sessions() {
-    local all=0 only_id='' cwd id_glob='' repository='' branch='' recorded_cwd='' summary=''
+    local all=0 only_id='' id_glob='' repository='' branch='' recorded_cwd='' summary=''
     local before='' older='' now='' age_cutoff=''
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -280,7 +321,8 @@ copilot_sessions() {
     fi
     local state_dir; state_dir="$(copilot_session_state_dir)"
     [[ -d "$state_dir" ]] || return 0
-    cwd="$(pwd -P)"
+    local _SCOPE_CWD _SCOPE_REPOSITORY _SCOPE_BRANCH
+    copilot_session_scope
 
     local dir ws
     local rows=()
@@ -301,8 +343,23 @@ copilot_sessions() {
         s_repo="$(copilot_ws_field "$ws" repository)"
         display="$(copilot_display_name "$ws")"
 
-        if [[ "$all" == "0" && -z "$only_id" && -z "$recorded_cwd" && "$s_cwd" != "$cwd" ]]; then
-            continue
+        local updated_epoch='' sort_key='-999999999999999999' malformed=0
+        if [[ -n "$s_created" ]] && ! copilot_timestamp "$s_created" >/dev/null; then
+            log_error "Session '$id' has invalid created_at in '$ws'."
+            malformed=1
+        fi
+        if [[ -n "$s_updated" ]]; then
+            if updated_epoch="$(copilot_timestamp "$s_updated")"; then
+                sort_key="$updated_epoch"
+            else
+                log_error "Session '$id' has invalid updated_at in '$ws'."
+                malformed=1
+            fi
+        fi
+        [[ "$malformed" == "0" ]] || continue
+
+        if [[ "$all" == "0" && -z "$only_id" && -z "$recorded_cwd" ]]; then
+            copilot_session_in_scope "$s_cwd" "$s_repo" "$s_branch" || continue
         fi
         if [[ -n "$id_glob" ]]; then copilot_glob_matches "$id" "$id_glob" || continue; fi
         if [[ -n "$repository" ]]; then
@@ -319,14 +376,6 @@ copilot_sessions() {
         fi
         if [[ -n "$summary" ]]; then copilot_glob_matches "$display" "$summary" || continue; fi
 
-        local updated_epoch='' sort_key='-999999999999999999'
-        if [[ -n "$s_updated" ]]; then
-            if updated_epoch="$(copilot_timestamp "$s_updated")"; then
-                sort_key="$updated_epoch"
-            else
-                log_warn "Session '$id' has an invalid updated_at timestamp: $s_updated"
-            fi
-        fi
         if [[ -n "$before" ]]; then
             [[ -n "$updated_epoch" ]] || continue
             copilot_timestamp_before "$updated_epoch" "$before" || continue
