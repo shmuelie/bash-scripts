@@ -48,6 +48,11 @@ git_worktrees() {
 
     _git_worktree_emit() {
         [[ -n "$path" ]] || return 0
+        if [[ "$detached" == 1 && "$bare" == 0 && "$prunable" == 0 && -d "$path" ]]; then
+            local rebase_branch
+            rebase_branch="$(git_rebase_branch "$path")" || return 1
+            [[ -z "$rebase_branch" ]] || branch="$rebase_branch"
+        fi
         printf '%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n' \
             "$path" "$SHM_FS" "$commit" "$SHM_FS" "$branch" "$SHM_FS" \
             "$bare" "$SHM_FS" "$detached" "$SHM_FS" "$locked" "$SHM_FS" \
@@ -223,6 +228,27 @@ git_operation() {
         if [[ -n "$step" && -n "$total" ]]; then printf '%s %s/%s\n' "$type" "$step" "$total"
         else printf '%s\n' "$type"; fi
     fi
+}
+
+git_rebase_branch() {
+    local repo="$1" git_dir state ref path
+    git_dir="$(git -C "$repo" rev-parse --absolute-git-dir)" || {
+        log_error "Could not resolve rebase metadata for '$repo'."
+        return 1
+    }
+    for state in rebase-merge rebase-apply; do
+        path="$git_dir/$state/head-name"
+        [[ -f "$path" ]] || continue
+        ref="$(cat -- "$path")" || {
+            log_error "Could not read rebase branch metadata '$path'."
+            return 1
+        }
+        while [[ "$ref" == *$'\r' || "$ref" == *$'\n' ]]; do ref="${ref%?}"; done
+        [[ "$ref" == refs/heads/* ]] || continue
+        git -C "$repo" check-ref-format "$ref" >/dev/null 2>&1 || continue
+        printf '%s\n' "${ref#refs/heads/}"
+        return 0
+    done
 }
 
 git_worktree_paths_equal() {
