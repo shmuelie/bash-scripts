@@ -154,6 +154,16 @@ alone do not expand local discovery. Missing repository, branch, or directory
 metadata never matches an explicit filter, even `*`. Summary means the displayed
 name, then legacy summary, then `(no summary)`.
 
+Azure DevOps origins also normalize to `organization/project/repository`:
+`https://dev.azure.com/org/project/_git/repo`,
+`https://org.visualstudio.com/project/_git/repo`, and
+`git@ssh.dev.azure.com:v3/org/project/repo` (or its `ssh://` spelling).
+HTTPS may include `DefaultCollection/`; encoded project/repository names and an
+optional `.git` suffix are supported. Invalid escapes, extra path segments,
+credentials/query/fragment components, decoded separators/control characters,
+and ambiguous or multiple origins fail closed to local-directory discovery.
+Normalization uses Node (v12 or newer) without network access.
+
 `--updated-before` accepts an ISO 8601 date or timestamp. `Z` or an explicit
 `+HH:MM`/`-HH:MM` offset identifies an instant; omitted offsets use the local
 timezone and date-only input means local midnight. `--older-than` takes a

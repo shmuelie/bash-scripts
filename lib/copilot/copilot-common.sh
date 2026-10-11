@@ -254,6 +254,10 @@ copilot_origin_identity() {
         printf '%s/%s\n' "$owner" "$repository"
         return 0
     fi
+    if have_cmd node; then
+        printf '%s' "$1" | node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/repository-identity.js"
+        return $?
+    fi
     return 1
 }
 
