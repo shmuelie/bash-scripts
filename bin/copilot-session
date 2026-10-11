@@ -129,18 +129,11 @@ case "$cmd" in
                 [[ "${rows[$i]%%"$SHM_FS"*}" != "$chosen" ]] || selected="$i"
             done
         elif [[ ${#rows[@]} -gt 1 ]]; then
-            labels=()
+            chosen="$(copilot_paginated_picker rows)" || exit $?
+            selected=-1
             for i in "${!rows[@]}"; do
-                IFS="$SHM_FS" read -r id name s_cwd branch repo created updated ecount esize path <<<"${rows[$i]}"
-                labels+=("$((i + 1))) $(one_line "$name") | $(one_line "$repo") | $(one_line "$branch") | $(one_line "$s_cwd") | $(one_line "$updated") | events: $ecount")
+                [[ "${rows[$i]%%"$SHM_FS"*}" != "$chosen" ]] || selected="$i"
             done
-            choice="$(printf '%s\n' "${labels[@]}" | pick_one 'Session')" ||
-                die 'No Copilot session selected.'
-            choice_index="${choice%%)*}"
-            [[ "$choice_index" =~ ^[1-9][0-9]*$ &&
-               "$choice_index" -le ${#rows[@]} ]] ||
-                die 'Invalid Copilot session selection.'
-            selected=$((choice_index - 1))
         fi
 
         launch_cwd="$(pwd -P)"

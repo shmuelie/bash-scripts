@@ -150,7 +150,7 @@ List and select share case-insensitive `--repository`, `--branch`, `--cwd`,
 and `--summary` glob filters, combined with AND. An explicit `--cwd` replaces
 the implicit current-directory scope and matches recorded paths literally
 (without resolving or normalizing them). Repository/branch/summary filters
-alone do not expand local discovery. Missing repository, branch, or directory
+alone do not expand the implicit scope. Missing repository, branch, or directory
 metadata never matches an explicit filter, even `*`. Summary means the displayed
 name, then legacy summary, then `(no summary)`.
 
@@ -202,7 +202,19 @@ copilot-session select --stay-in-directory "continue" -- --model fast
 copilot-session select --dry-run --first 1
 ```
 
-Multiple matches use the configured fzf/console picker. Dry-run requires the
+Multiple matches use the configured fzf/console picker with **22 sessions per
+page**, descriptive summaries, and single-letter keys. `M` moves forward,
+`P` moves back, `N` starts new, and `C` cancels (status 130); new and cancel are
+available on every page. No blank/numeric input selects a default. Console
+`?` shows full page details and `?A` shows one session's full name, ID, repository,
+branch, directory, update time, and event count; fzf shows that context in its
+header and initially focuses the help action, not a default session. Labels
+sanitize terminal controls and line separators and retain up to
+80 Unicode text elements including `...`. Only duplicate displayed names
+(including truncation collisions) receive branch suffixes, computed across all
+pages. Literal ampersands remain session data; shortcuts always map to the
+original session ID, not the displayed label.
+Dry-run requires the
 filters or `--first 1` to resolve exactly one session and never opens a picker.
 
 ### Replaceable session picker
@@ -228,8 +240,9 @@ introduce no UI dependency. The default fzf/console picker remains available;
 an unavailable console or failed picker aborts instead of silently launching.
 
 Launchers call the selector **only when existing resume policy needs a picker**:
-folder/branch preference, ignored names, unnamed filtering, automatic single
-session and lone named-session resume, `--resume-latest`, explicit resume,
+origin/branch identity and legacy-directory preference, ignored names, unnamed
+filtering, automatic single session and lone named-session resume,
+`--resume-latest`, explicit resume,
 `--session-id`, `--no-resume`, and `--defer-resume` still apply. Selection changes
 only resume, not model, MCP, deny-tool, or passthrough arguments.
 Global `select` calls a supplied selector even for one candidate, after shared
@@ -338,4 +351,5 @@ checkpoint bodies.
 ## Requirements
 
 - `copilot` and `jq` on `PATH`.
-- `node` for the session-maintenance subcommands.
+- `node` (v12 or newer) for the native session picker, Azure origin
+  normalization, and session-maintenance subcommands.

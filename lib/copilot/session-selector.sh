@@ -48,3 +48,91 @@ copilot_select_callback() {
             return 1 ;;
     esac
 }
+
+# One shared native picker; each shortcut maps to an original row, never a label.
+copilot_paginated_picker() {
+    local -n _page_rows="$1"
+    [[ ${#_page_rows[@]} -gt 0 ]] || return 0
+    require_cmd node
+    require_cmd jq
+    local presentation
+    presentation="$(printf '%s\n' "${_page_rows[@]}" | copilot_rows_json |
+        node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/session-display.js")" || return 1
+    local -a display_labels=()
+    mapfile -t display_labels < <(printf '%s' "$presentation" | jq -r '.[].label')
+    local keys='ABDEFGHIJKLOQRSTUVWXYZ' page_start=0 count=${#_page_rows[@]} page_size=22
+    local tty="${SHM_TTY_PATH:-/dev/tty}" tty_fd='' use_fzf=0
+    if [[ -z "${SHM_TTY_PATH:-}" ]] && have_cmd fzf; then
+        use_fzf=1
+    elif ! { exec {tty_fd}<"$tty"; } 2>/dev/null; then
+        log_error 'Session selection requires console input or --selector.'
+        return 1
+    fi
+    local page_end i choice key matched status context
+    local -a choices=()
+    while :; do
+        page_end=$((page_start + page_size))
+        [[ "$page_end" -le "$count" ]] || page_end="$count"
+        choices=()
+        for ((i = page_start; i < page_end; i++)); do
+            choices+=("${keys:i-page_start:1} - ${display_labels[i]}")
+        done
+        [[ "$page_start" -eq 0 ]] || choices+=('P - Previous page')
+        [[ "$page_end" -ge "$count" ]] || choices+=('M - Next page')
+        choices+=('N - New session' 'C - Cancel' '? - Full session details')
+        context="Sessions $((page_start + 1))-$page_end of $count (page $((page_start / page_size + 1)) of $(((count + page_size - 1) / page_size))). No default selection."
+        if [[ "$use_fzf" == "1" ]]; then
+            local details
+            details="$(printf '%s' "$presentation" | jq -r --argjson start "$page_start" --argjson stop "$page_end" \
+                '.[$start:$stop] | map(.help) | join("\n\n")')" || return 1
+            status=0
+            choice="$(printf '%s\n' "${choices[@]}" |
+                fzf --prompt='Session> ' --height=40% --reverse --bind=start:last \
+                    --header="$context"$'\n\n'"$details")" || status=$?
+            if [[ "$status" -ne 0 ]]; then
+                [[ "$status" -eq 130 ]] || log_error 'No Copilot session selected.'
+                return "$status"
+            fi
+            matched=0
+            for key in "${choices[@]}"; do [[ "$key" != "$choice" ]] || matched=1; done
+            if [[ "$matched" == "0" ]]; then
+                log_error 'Invalid Copilot session selection.'
+                return 1
+            fi
+            choice="${choice:0:1}"
+        else
+            printf '\n%s\n' "$context" >&2
+            printf '%s\n' "${choices[@]}" >&2
+            printf 'Session key (? or ?A for details): ' >&2
+            if ! IFS= read -r -u "$tty_fd" choice; then
+                exec {tty_fd}<&-
+                log_error 'No Copilot session selected.'
+                return 1
+            fi
+            choice="$(_workspace_yaml_trim "$choice")"
+            choice="${choice^^}"
+        fi
+        case "$choice" in
+            N) [[ -z "$tty_fd" ]] || exec {tty_fd}<&-; return 0 ;;
+            C) [[ -z "$tty_fd" ]] || exec {tty_fd}<&-; return 130 ;;
+            M) [[ "$page_end" -ge "$count" ]] || page_start="$page_end"; continue ;;
+            P) [[ "$page_start" -eq 0 ]] || page_start=$((page_start - page_size)); continue ;;
+            \?*)
+                key="${choice#?}"
+                for ((i = page_start; i < page_end; i++)); do
+                    if [[ -z "$key" || "$key" == "${keys:i-page_start:1}" ]]; then
+                        printf '%s' "$presentation" | jq -r --argjson index "$i" '.[$index].help' >&2
+                    fi
+                done
+                continue ;;
+        esac
+        for ((i = page_start; i < page_end; i++)); do
+            if [[ "$choice" == "${keys:i-page_start:1}" ]]; then
+                [[ -z "$tty_fd" ]] || exec {tty_fd}<&-
+                printf '%s\n' "${_page_rows[i]%%"$SHM_FS"*}"
+                return 0
+            fi
+        done
+        log_warn 'Choose a displayed session key or action; there is no default.'
+    done
+}

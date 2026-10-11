@@ -197,32 +197,13 @@ _shm_resolve_resume() {
     fi
 }
 
-# _shm_session_picker IDS_ARRAY NAMES_ARRAY — show a picker and echo the chosen id
-# (empty for "New session"). Uses fzf/select via pick_one on labels.
+# _shm_session_picker IDS_ARRAY NAMES_ARRAY ROWS_ARRAY SELECTOR — value-only picker.
 _shm_session_picker() {
     if [[ -n "$4" ]]; then
         copilot_select_callback "$4" "$3"
         return $?
     fi
-    local -n _ids="$1"; local -n _names="$2"
-    local labels=() i
-    for i in "${!_ids[@]}"; do
-        labels+=("$((i + 1))) ${_names[$i]}  [${_ids[$i]:0:8}]")
-    done
-    labels+=("N) New session")
-    local choice
-    choice="$(printf '%s\n' "${labels[@]}" | pick_one 'Session')" || {
-        log_error 'No Copilot session selected.'
-        return 1
-    }
-    [[ -z "$choice" || "$choice" == 'N) New session' ]] && return 0
-    # Map the chosen label back to its index.
-    for i in "${!labels[@]}"; do
-        if [[ "${labels[$i]}" == "$choice" ]]; then
-            [[ "$i" -lt "${#_ids[@]}" ]] && printf '%s\n' "${_ids[$i]}"
-            return 0
-        fi
-    done
+    copilot_paginated_picker "$3"
 }
 
 # build_launch_plan ARGS... — parse arguments and populate COPILOT_EXE/ARGS/PASSTHROUGH.
@@ -336,7 +317,7 @@ build_launch_plan() {
                 [[ $# -ge 2 ]] || die '--model requires a value.'
                 model="$2"; fwd+=("$1" "$2"); shift 2 ;;
             -C|--change-dir)
-                [[ $# -ge 2 && -n "$2" ]] || { log_error "$1 requires an existing directory."; return 1; }
+                [[ $# -ge 2 && -n "$2" ]] || { log_error "$1 requires a value (an existing directory)."; return 1; }
                 change_dir="$2"; change_index=${#fwd[@]}
                 change_indices+=("$change_index")
                 fwd+=("$1" "$2"); shift 2 ;;

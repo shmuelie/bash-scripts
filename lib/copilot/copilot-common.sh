@@ -210,10 +210,10 @@ copilot_ws_name() {
 copilot_display_name() {
     local file="$1" name summary
     name="$(copilot_ws_name "$file")"
-    name="${name//$'\n'/ }"
+    name="${name//[[:cntrl:]]/ }"
     if [[ -n "$name" ]]; then printf '%s\n' "$name"; return; fi
     summary="$(copilot_ws_field "$file" summary)"
-    summary="${summary//$'\n'/ }"
+    summary="${summary//[[:cntrl:]]/ }"
     if [[ -n "$summary" ]]; then printf '%s\n' "$summary"; return; fi
     printf '%s\n' '(no summary)'
 }
