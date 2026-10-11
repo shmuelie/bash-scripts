@@ -66,8 +66,8 @@ teardown() { rm -rf "$WORK"; }
     [ -L "$PREFIX/unrelated-link" ]
 }
 
-@test "--no-completions skips the rc block on symlink install" {
-    run "$REPO_ROOT/install.sh" --method symlink --prefix "$PREFIX" --rc "$RC" --no-completions
+@test "disabling completions and navigation skips the rc block on symlink install" {
+    run "$REPO_ROOT/install.sh" --method symlink --prefix "$PREFIX" --rc "$RC" --no-completions --no-worktree-navigation
     [ "$status" -eq 0 ]
     [ ! -f "$RC" ] || ! grep -qF 'bash-scripts' "$RC"
 }

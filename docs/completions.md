@@ -31,8 +31,10 @@ do not bypass that check.
 
 The shell is selected by a recognizable `--rc` filename (`*bashrc`, `*.bash`,
 `*zshrc`, or `*.zsh`), otherwise by `$SHELL`. Reinstalling replaces the single
-managed rc block. `--no-completions` removes any previously installed activation
-while retaining the selected command installation method. `--uninstall`
+managed rc block. `--no-completions` removes any previously installed completion activation
+while retaining the selected command installation method and interactive
+worktree navigation. `--no-worktree-navigation` independently disables those
+wrappers; use both flags to omit both integrations. `--uninstall`
 removes the managed rc block and this repository's command symlinks; it leaves
 unrelated rc content and symlinks alone. Already-running shells retain their
 loaded functions until restarted.
@@ -79,6 +81,10 @@ where the command actually accepts them.
 | `vscode-ext`, `start-vscode`, `vscode-chat` | Extension `list`/`install`/`uninstall`/`update`, `.vsix` files, profile/category values, forwarded documented editor flags, editor paths and chat `--add-file` paths. |
 | `dev-setup`, `installed-apps`, `ado-npm-token` | Setup `check`/`apply` and JSON config files; application sources `dpkg`/`rpm`/`flatpak`/`snap`; token command's supported options. |
 | `perf-record`, `service-process`, `terminal-config`, `format-duration`, `in-location`, `is-elevated`, `reset-terminal` | Recording `start`/`stop` and output files; service/output/format flags; `in-location`'s directory operand. No fabricated service names or no-argument command options. |
+
+Worktree creation includes `--stay-in-directory` to opt out of the interactive
+navigation wrappers and `--confirm` for explicit creation approval. Executables
+still print paths without changing the parent shell.
 
 Hidden launcher compatibility flags are recognized as input, not promoted as
 suggestions. The Windows-only `--no-eager-powershell-resolution` is not offered

@@ -102,7 +102,7 @@ install_commands() {
     for shell in /bin/bash /bin/zsh; do
         export SHELL="$shell"
         install_commands
-        install_commands --no-completions
+        install_commands --no-completions --no-worktree-navigation
         ! grep -qF bash-scripts "$RC"
         if [[ "$shell" == /bin/bash ]]; then
             run bash --noprofile --norc -c 'source "$1"; complete -p copilot-session' -- "$RC"
@@ -123,7 +123,7 @@ install_commands() {
 
 @test "path installation retains PATH but omits completions when disabled" {
     install_commands --method path
-    install_commands --method path --no-completions
+    install_commands --method path --no-completions --no-worktree-navigation
     run bash --noprofile --norc -c 'source "$1"; command -v copilot-session; complete -p copilot-session' -- "$RC"
     [ "$status" -ne 0 ]
     [ "${lines[0]}" = "$REPO_ROOT/bin/copilot-session" ]

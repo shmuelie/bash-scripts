@@ -5,6 +5,7 @@ set -euo pipefail
 _SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 source "$_SHM_ROOT/lib/common.sh"
 source "$_SHM_ROOT/lib/git/git-common.sh"
+source "$_SHM_ROOT/lib/git/git-ports.sh"
 
 usage() { cat <<'EOF'
 Usage: git-worktree-add [options] <branch>
@@ -12,19 +13,24 @@ Usage: git-worktree-add [options] <branch>
 Options:
   --path, -C <repository-or-child>  Repository to use.
   --worktree-path <destination>     Explicit destination.
+  --stay-in-directory               Opt out of interactive wrapper navigation.
+  --confirm                         Ask before creating.
   --dry-run, --whatif               Preview without creating.
   -v, --verbose                     Verbose output.
 EOF
 }
 
-branch=''; repo_arg=''; destination=''
+branch=''; repo_arg=''; destination=''; GIT_CONFIRM=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
-        --path|-C) repo_arg="$2"; shift 2 ;;
-        --worktree-path) destination="$2"; shift 2 ;;
+        --path|-C) git_option_value "$@"; repo_arg="$2"; shift 2 ;;
+        --worktree-path) git_option_value "$@"; destination="$2"; shift 2 ;;
+        --stay-in-directory) shift ;;
+        --confirm) GIT_CONFIRM=1; shift ;;
         --dry-run|--whatif) DRY_RUN=1; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
+        --) shift; [[ $# == 1 && -z "$branch" ]] || die 'Specify one branch.'; branch="$1"; shift ;;
         -*) die "Unknown option: $1" ;;
         *) [[ -z "$branch" ]] || die "Unexpected argument: $1"; branch="$1"; shift ;;
     esac
@@ -38,7 +44,7 @@ if [[ -n "$destination" ]]; then
 else
     worktree_path="$(git_worktree_path "$repo" "$branch")"
 fi
-should_process "Add worktree for branch '$branch' at $worktree_path" || exit 0
+git_should_process "Add worktree for branch '$branch' at $worktree_path" || exit 0
 if ! output="$(git -C "$repo" worktree add "$worktree_path" "$branch" 2>&1)"; then
     printf '%s\n' "$output" >&2
     die "git worktree add failed for branch '$branch' at '$worktree_path'."
