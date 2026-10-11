@@ -16,7 +16,7 @@ setup() {
     cat > "$STUB/copilot-plugin" <<'EOF'
 #!/usr/bin/env bash
 if [[ "$1" == "list" ]]; then
-    awk -F: '$1=="plugin" {printf "{\"name\":\"%s\",\"fullName\":\"%s\",\"marketplace\":null,\"version\":\"1\"}\n",$2,$2}' "$STATE" |
+    awk -F: '$1=="plugin" {printf "{\"name\":\"%s\",\"fullName\":\"%s\",\"marketplace\":null,\"version\":\"1\",\"managed\":true,\"source\":\"direct\",\"installedFrom\":\"owner/%s\"}\n",$2,$2,$2}' "$STATE" |
         jq -s .
 elif [[ "$1" == "install" ]]; then
     printf 'plugin:%s\n' "${2##*/}" >> "$STATE"

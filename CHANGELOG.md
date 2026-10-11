@@ -8,9 +8,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Copilot plugin and marketplace discovery distinguish native failures from
+  empty inventories, and setup checks match exact managed plugin sources.
 - Git status summaries and worktree listings retain the original branch during
   a paused rebase, while preserving the actual detached HEAD state and keeping
   unrelated detached worktrees and merge targets unchanged.
+
+### Added
+
+- Strict native JSON plugin inventory with a safe legacy fallback, MCP tool
+  filters, bounded timeouts, and enabled/tool-state reporting.
+- Validated, nonauthenticating plans for scoped GitHub MCP authentication.
+- Typed Copilot fleet, Auto routing, dynamic-retrieval, and mouse controls,
+  retaining compatibility flags.
 
 ## [0.1.0] - 2026-09-18
 

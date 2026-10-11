@@ -11,26 +11,10 @@ Usage: copilot-plugin <command> [args]
 
 Commands:
   list [pattern] [--json]     List installed plugins (optional glob filter).
-  install <source>            Install a plugin (owner/repo, plugin@marketplace, URL).
+  install <source> [--dry-run] Install a plugin (owner/repo, plugin@marketplace, URL).
   update <name> [--dry-run]   Update a plugin (retries once on EBUSY).
   uninstall <name> [--dry-run] Uninstall a plugin by full name.
 EOF
-}
-
-# parse_plugin_list — read `copilot plugin list` and emit "name<TAB>fullname<TAB>marketplace<TAB>version".
-parse_plugin_list() {
-    local exe; exe="$(resolve_copilot)"
-    "$exe" plugin list 2>&1 | while IFS= read -r line; do
-        if [[ "$line" =~ ^[[:space:]]+•[[:space:]]+(.+)[[:space:]]+\(v(.+)\)[[:space:]]*$ ]]; then
-            local full="${BASH_REMATCH[1]}" version="${BASH_REMATCH[2]}"
-            full="${full%"${full##*[![:space:]]}"}"   # rtrim
-            local name="$full" marketplace=''
-            if [[ "$full" =~ ^(.+)@(.+)$ ]]; then
-                name="${BASH_REMATCH[1]}"; marketplace="${BASH_REMATCH[2]}"
-            fi
-            printf '%s%s%s%s%s%s%s\n' "$name" "$SHM_FS" "$full" "$SHM_FS" "$marketplace" "$SHM_FS" "$version"
-        fi
-    done
 }
 
 cmd="${1:-}"; shift || true
@@ -50,46 +34,41 @@ case "$cmd" in
                 *) pattern="$a" ;;
             esac
         done
-        mapfile -t rows < <(parse_plugin_list)
+        inventory="$(copilot_plugins_json)" || exit $?
+        rows_text="$(jq -r '.[] | [.name,.fullName] | join("\u001f")' <<< "$inventory")"
+        mapfile -t rows <<< "$rows_text"
         # Filter by name or fullname glob.
         filtered=()
         for row in "${rows[@]:-}"; do
             [[ -z "$row" ]] && continue
-            IFS="$SHM_FS" read -r name full marketplace version <<< "$row"
+            IFS="$SHM_FS" read -r name full <<< "$row"
             [[ -z "$name" ]] && continue
             # shellcheck disable=SC2053
             if [[ "$name" == $pattern || "$full" == $pattern ]]; then
-                filtered+=("$name$SHM_FS$full$SHM_FS$marketplace$SHM_FS$version")
+                filtered+=("$full")
             fi
         done
+        matches="$(printf '%s\n' "${filtered[@]}" | jq -Rsc 'split("\n") | map(select(length>0))')"
+        result="$(jq --argjson matches "$matches" '[.[] | select(.fullName as $n | $matches | index($n))]' <<< "$inventory")"
         if [[ "$json" == "1" ]]; then
-            require_cmd jq
-            if [[ ${#filtered[@]} -eq 0 ]]; then echo '[]'; else
-                printf '%s\n' "${filtered[@]}" | jq -R -s 'def nz: if .=="" then null else . end;
-                    split("\n") | map(select(length>0) | split("\u001f") |
-                    {name:.[0], fullName:.[1], marketplace:(.[2]|nz), version:.[3]})'
-            fi
+            printf '%s\n' "$result"
         else
-            for r in "${filtered[@]:-}"; do
-                [[ -z "$r" ]] && continue
-                # shellcheck disable=SC2034  # unpacking a fixed row; only some fields printed
-                IFS="$SHM_FS" read -r name full marketplace version <<< "$r"
-                printf '%-40s v%s\n' "$full" "$version"
-            done
+            jq -r '.[] | "\(.fullName) v\(.version) [\(if .enabled then "enabled" else "disabled" end)] (\(.source))"' <<< "$result"
         fi
         ;;
     install)
         source_arg="${1:-}"; [[ -n "$source_arg" ]] || die 'install requires a source.'
+        [[ "${2:-}" != "--dry-run" && "${2:-}" != "--whatif" ]] || DRY_RUN=1
         exe="$(resolve_copilot)"
-        # Skip if already installed (check name or full name column).
-        check="$source_arg"
-        if [[ "$source_arg" =~ ^(.+)@ ]]; then check="${BASH_REMATCH[1]}"
-        elif [[ "$source_arg" =~ /([^/#]+)(#|$) ]]; then check="${BASH_REMATCH[1]}"; fi
-        while IFS="$SHM_FS" read -r p_name p_full _; do
-            if [[ "$p_name" == "$check" || "$p_full" == "$source_arg" ]]; then
-                log_verbose "Plugin '$p_full' appears to be installed."
-            fi
-        done < <(parse_plugin_list)
+        should_process "copilot plugin install $source_arg" || exit 0
+        inventory="$(copilot_plugins_json)" || exit $?
+        if copilot_plugin_install_match "$inventory" "$source_arg"; then
+            log_verbose "Plugin from '$source_arg' is already installed."
+            exit 0
+        else
+            match_status=$?
+            [[ "$match_status" == "1" ]] || exit "$match_status"
+        fi
         "$exe" plugin install "$source_arg" || die "Failed to install plugin: $source_arg"
         ;;
     update)

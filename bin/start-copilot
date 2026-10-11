@@ -20,7 +20,7 @@ while [[ $# -gt 0 ]]; do
         --) args+=("$1"); saw_ddash=1; shift ;;
         --passthru) passthru=1; shift ;;
         --dry-run|--whatif) DRY_RUN=1; shift ;;
-        --selector|--resume-session|--usage-output-file|--enable-mcp-server|--disable-mcp-server|--name|--session-id|--model|--reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format|-C|--change-dir)
+        --selector|--resume-session|--usage-output-file|--enable-mcp-server|--disable-mcp-server|--additional-mcp-config|--mcp-github-auth|--prompt|-p|--interactive|-i|--auto-tier|--dynamic-retrieval|--mouse|--prefer-version|--name|--session-id|--model|--reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format|-C|--change-dir)
             args+=("$1")
             shift
             if [[ $# -gt 0 ]]; then args+=("$1"); shift; fi
@@ -37,12 +37,12 @@ if [[ "$passthru" == "1" ]]; then
     printf 'Exe: %s\n' "$COPILOT_EXE"
     printf 'Passthrough: %s\n' "$([[ "$COPILOT_PASSTHROUGH" == "1" ]] && echo true || echo false)"
     printf 'Args:'
-    printf ' %q' "${COPILOT_ARGS[@]}"
+    copilot_preview_args
     printf '\n'
     exit 0
 fi
 
-if ! should_process "Execute: $COPILOT_EXE ${COPILOT_ARGS[*]}"; then
+if ! should_process "Execute: $COPILOT_EXE$(copilot_preview_args)"; then
     exit 0
 fi
 

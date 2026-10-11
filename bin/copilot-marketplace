@@ -30,6 +30,7 @@ case "$cmd" in
     list)
         pattern='*'; json=0
         for a in "$@"; do case "$a" in --json) json=1 ;; *) pattern="$a" ;; esac; done
+        inventory="$(copilot_discover plugin marketplace list)" || exit $?
         rows=()
         while IFS= read -r line; do
             if [[ "$line" =~ ^[[:space:]]+[◆•][[:space:]]+([^[:space:]]+)[[:space:]]+\((GitHub|URL):[[:space:]]+(.+)\) ]]; then
@@ -37,7 +38,7 @@ case "$cmd" in
                 # shellcheck disable=SC2053
                 [[ "$mkt" == $pattern ]] && rows+=("$mkt"$'\t'"$src")
             fi
-        done < <("$exe" plugin marketplace list 2>&1)
+        done <<< "$inventory"
         if [[ "$json" == "1" ]]; then
             require_cmd jq
             if [[ ${#rows[@]} -eq 0 ]]; then echo '[]'; else
@@ -55,6 +56,12 @@ case "$cmd" in
     add)
         src="${1:-}"; [[ -n "$src" ]] || die 'add requires a source.'
         should_process "copilot plugin marketplace add $src" || exit 0
+        require_cmd jq
+        inventory="$("$0" list --json)" || exit $?
+        if jq -e --arg src "$src" 'any(.[]; .repository == $src)' <<< "$inventory" >/dev/null; then
+            log_verbose "Marketplace from '$src' is already registered."
+            exit 0
+        fi
         "$exe" plugin marketplace add "$src" || die "Failed to register marketplace: $src"
         ;;
     remove)
@@ -68,13 +75,14 @@ case "$cmd" in
         [[ "$name" == "--json" ]] && { json=1; name="${2:-}"; }
         [[ "${2:-}" == "--json" ]] && json=1
         [[ -n "$name" ]] || die 'browse requires a marketplace name.'
+        inventory="$(copilot_discover plugin marketplace browse "$name")" || exit $?
         rows=()
         while IFS= read -r line; do
             if [[ "$line" =~ ^[[:space:]]+•[[:space:]]+([^[:space:]]+)[[:space:]]+-[[:space:]]+(.+)$ ]]; then
                 pname="${BASH_REMATCH[1]}"; desc="${BASH_REMATCH[2]%"${BASH_REMATCH[2]##*[![:space:]]}"}"
                 rows+=("$pname"$'\t'"$desc")
             fi
-        done < <("$exe" plugin marketplace browse "$name" 2>&1)
+        done <<< "$inventory"
         if [[ "$json" == "1" ]]; then
             require_cmd jq
             if [[ ${#rows[@]} -eq 0 ]]; then echo '[]'; else

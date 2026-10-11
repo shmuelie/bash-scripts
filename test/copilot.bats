@@ -17,13 +17,13 @@ setup() {
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$COPILOT_ARGS_LOG"
 case "$1 $2" in
-  "plugin list") printf '  • dotnet-skills@dotnet-agent-skills (v1.2.3)\n  • local-plugin (v0.1.0)\n' ;;
+  "plugin list") printf '[{"name":"dotnet-skills","marketplace":"dotnet-agent-skills","version":"1.2.3","enabled":true,"source":"marketplace"},{"name":"local-plugin","version":"0.1.0","enabled":true,"source":"direct","installedFrom":"owner/local-plugin"}]\n' ;;
   "plugin marketplace")
     case "$3" in
       list) printf '  ◆ dotnet-agent-skills (GitHub: dotnet/skills)\n  • community (URL: https://example.com/mp.json)\n' ;;
       browse) printf '  • alpha - First plugin\n  • beta - Second plugin\n' ;;
     esac ;;
-  "mcp list") printf '{"mcpServers":{"ctx7":{"type":"http","url":"https://mcp.context7.com/mcp","source":"user"},"local":{"type":"stdio","command":"npx","args":["-y","@x/y"],"source":"workspace"}}}\n' ;;
+  "mcp list") printf '{"mcpServers":{"ctx7":{"type":"http","url":"https://mcp.context7.com/mcp","source":"user","enabled":true,"tools":"*"},"local":{"type":"stdio","command":"npx","args":["-y","@x/y"],"source":"workspace","enabled":false,"tools":""}}}\n' ;;
 esac
 exit 0
 EOF

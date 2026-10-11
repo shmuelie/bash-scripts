@@ -67,9 +67,23 @@ Approval and output:
   --allow-all-tools         Allow tools while retaining path/URL verification.
   --usage-output-file <p>   Write native usage output to the specified path.
 
+Routing and initial prompt:
+  --prompt/-p <text>        Non-interactive autopilot prompt (also a bare argument).
+  --interactive/-i <text>  Initial prompt that remains interactive.
+  --fleet                  Fleet mode; requires a prompt or --interactive.
+  --auto-tier <tier>        efficiency, balance, or intelligence; model must be auto.
+  --dynamic-retrieval <setting>  skills=on or skills=off (repeatable; CLI persists it).
+  --mouse <on|off>          Native mouse setting.
+  --no-mouse               Native no-mouse switch; cannot combine with --mouse.
+
 MCP:
   --enable-mcp-server <n>  Force a server on and forward the native enable flag.
   --disable-mcp-server <n> Force a server off for this launch.
+  --additional-mcp-config <JSON|@path>  Explicit remote configuration (repeatable).
+  --mcp-github-auth <server=origin>     Scoped native GitHub auth (repeatable).
+    Requires a named explicit HTTP/SSE server at the approved HTTPS origin.
+    HTTP is allowed only for literal 127.0.0.1 or [::1]. Never include credentials.
+    Plans do not authenticate; explicit config remains verbatim in returned plans.
 
 Convenience passthrough (forwarded to copilot):
   --model, --reasoning-effort, --agent, --mode, --context, --add-dir,
@@ -203,11 +217,13 @@ build_launch_plan() {
     # shellcheck disable=SC2034
     COPILOT_PASSTHROUGH=0
 
-    local prompt='' name='' selector=''
+    local prompt='' name='' selector='' interactive=''
     local no_resume=0 resume_latest=0 resume_session='' show_picker=0 include_unnamed=0 defer_resume=0
     local session_id_present=0
     local no_allow_all=0 no_experimental=0 no_deny=0
     local assisted_approval=0
+    local additional_mcp=() mcp_github_auth=()
+    local fleet=0 auto_tier='' model='' no_mouse=0 mouse_present=0 no_eager_powershell=0 prefer_version=0
     local enable_mcp=() disable_mcp=() fwd=() passthrough_args=() saw_ddash=0
 
     while [[ $# -gt 0 ]]; do
@@ -215,6 +231,10 @@ build_launch_plan() {
             [[ "$1" == '--session-id' || "$1" == --session-id=* ]] && session_id_present=1
             passthrough_args+=("$1"); shift; continue
         fi
+        case "$1" in
+            --auto-tier=*|--dynamic-retrieval=*|--mouse=*|--prefer-version=*|--interactive=*|--prompt=*|--model=*)
+                set -- "${1%%=*}" "${1#*=}" "${@:2}" ;;
+        esac
         case "$1" in
             --) saw_ddash=1; shift ;;
             --no-resume) no_resume=1; shift ;;
@@ -249,9 +269,45 @@ build_launch_plan() {
             --disable-mcp-server)
                 [[ $# -ge 2 ]] || die '--disable-mcp-server requires a server name.'
                 disable_mcp+=("$2"); shift 2 ;;
+            --additional-mcp-config)
+                [[ $# -ge 2 && -n "$2" ]] || die '--additional-mcp-config requires JSON or @path.'
+                additional_mcp+=("$2"); fwd+=("$1" "$2"); shift 2 ;;
+            --additional-mcp-config=*)
+                additional_mcp+=("${1#*=}"); fwd+=(--additional-mcp-config "${1#*=}"); shift ;;
+            --mcp-github-auth)
+                [[ $# -ge 2 && -n "$2" ]] || die '--mcp-github-auth requires server=origin.'
+                mcp_github_auth+=("$2"); fwd+=("$1" "$2"); shift 2 ;;
+            --mcp-github-auth=*)
+                mcp_github_auth+=("${1#*=}"); fwd+=(--mcp-github-auth "${1#*=}"); shift ;;
             --name)
                 [[ $# -ge 2 ]] || die '--name requires a value.'
                 name="$2"; shift 2 ;;
+            --prompt|-p)
+                [[ $# -ge 2 && -n "$2" ]] || die "$1 requires a prompt."
+                prompt="$2"; shift 2 ;;
+            --interactive|-i)
+                [[ $# -ge 2 && -n "$2" ]] || die "$1 requires a prompt."
+                interactive="$2"; fwd+=(--interactive "$2"); shift 2 ;;
+            --fleet) fleet=1; fwd+=("$1"); shift ;;
+            --auto-tier)
+                [[ $# -ge 2 ]] || die '--auto-tier requires efficiency, balance, or intelligence.'
+                case "$2" in efficiency|balance|intelligence) ;; *) die 'Invalid --auto-tier: use efficiency, balance, or intelligence.' ;; esac
+                auto_tier="$2"; fwd+=("$1" "$2"); shift 2 ;;
+            --dynamic-retrieval)
+                [[ $# -ge 2 ]] || die '--dynamic-retrieval requires skills=on or skills=off.'
+                case "$2" in skills=on|skills=off) ;; *) die 'Invalid --dynamic-retrieval: use skills=on or skills=off.' ;; esac
+                fwd+=("$1" "$2"); shift 2 ;;
+            --mouse)
+                [[ $# -ge 2 ]] || die '--mouse requires on or off.'
+                case "$2" in on|off) ;; *) die 'Invalid --mouse: use on or off.' ;; esac
+                mouse_present=1; fwd+=("$1" "$2"); shift 2 ;;
+            --no-mouse) no_mouse=1; fwd+=("$1"); shift ;;
+            --no-eager-powershell-resolution)
+                no_eager_powershell=1; fwd+=("$1"); shift ;;
+            --prefer-version)
+                [[ $# -ge 2 && -n "$2" ]] || die '--prefer-version requires a version.'
+                prefer_version=1; fwd+=("$1" "$2"); shift 2 ;;
+            --enable-reasoning-summaries) fwd+=("$1"); shift ;;
             --session-id)
                 [[ $# -ge 2 ]] || die '--session-id requires a value.'
                 session_id_present=1
@@ -259,7 +315,10 @@ build_launch_plan() {
             --session-id=*)
                 session_id_present=1
                 fwd+=("$1"); shift ;;
-            --model|--reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format|-C|--change-dir)
+            --model)
+                [[ $# -ge 2 ]] || die '--model requires a value.'
+                model="$2"; fwd+=("$1" "$2"); shift 2 ;;
+            --reasoning-effort|--agent|--mode|--context|--add-dir|--log-level|--output-format|-C|--change-dir)
                 [[ $# -ge 2 ]] || die "$1 requires a value."
                 fwd+=("$1" "$2"); shift 2 ;;
             --plan) fwd+=("$1"); shift ;;
@@ -281,6 +340,27 @@ build_launch_plan() {
         [[ ${#fwd[@]} -gt 0 ]] && COPILOT_ARGS+=("${fwd[@]}")
         [[ ${#passthrough_args[@]} -gt 0 ]] && COPILOT_ARGS+=("${passthrough_args[@]}")
         return 0
+    fi
+
+    [[ "$fleet" == "0" || -n "$prompt" || -n "$interactive" ]] ||
+        die '--fleet requires a prompt or --interactive.'
+    [[ -z "$auto_tier" || -z "$model" || "$model" == auto ]] ||
+        die '--auto-tier can only be combined with --model auto.'
+    [[ "$no_mouse" == "0" || "$mouse_present" == "0" ]] ||
+        die '--no-mouse cannot be combined with --mouse.'
+    [[ -z "$prompt" || -z "$interactive" ]] || die 'Choose a prompt or --interactive, not both.'
+    if [[ "$no_eager_powershell" == "1" ]]; then
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*) ;;
+            *) die '--no-eager-powershell-resolution is only supported on Windows.' ;;
+        esac
+    fi
+    if [[ "$prefer_version" == "1" && ! " ${fwd[*]} " == *" --no-auto-update "* ]]; then
+        fwd+=(--no-auto-update)
+    fi
+
+    if [[ ${#mcp_github_auth[@]} -gt 0 ]]; then
+        _shm_validate_mcp_github_auth additional_mcp mcp_github_auth || return $?
     fi
 
     # Defaults.
@@ -328,6 +408,33 @@ build_launch_plan() {
     # Arbitrary passthrough args (after --).
     [[ ${#passthrough_args[@]} -gt 0 ]] && COPILOT_ARGS+=("${passthrough_args[@]}")
     return 0
+}
+
+_shm_validate_mcp_github_auth() {
+    local -n _configs="$1" _scopes="$2"
+    require_cmd node
+    local helper value
+    helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mcp-auth.js"
+    {
+        for value in "${_configs[@]}"; do printf 'config\0%s\0' "$value"; done
+        for value in "${_scopes[@]}"; do printf 'auth\0%s\0' "$value"; done
+    } | COPILOT_AUTH_HOME="$(copilot_home)" node "$helper"
+}
+
+# Preview diagnostics are not the reusable plan: redact inline MCP configuration.
+copilot_preview_args() {
+    local value redact_next=0
+    for value in "${COPILOT_ARGS[@]}"; do
+        if [[ "$redact_next" == "1" ]]; then
+            [[ "$value" == @* ]] || value='<inline MCP config redacted>'
+            redact_next=0
+        elif [[ "$value" == --additional-mcp-config ]]; then
+            redact_next=1
+        elif [[ "$value" == --additional-mcp-config=* && "$value" != --additional-mcp-config=@* ]]; then
+            value='--additional-mcp-config=<inline MCP config redacted>'
+        fi
+        printf ' %q' "$value"
+    done
 }
 
 # _shm_apply_mcp_autoconnect ENABLE_ARRAY DISABLE_ARRAY — append --disable-mcp-server

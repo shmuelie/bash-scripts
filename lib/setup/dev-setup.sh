@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Resource validation and application helpers for dev-setup.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../copilot/copilot-common.sh"
 
 validate_setup_config() {
     jq -e '
@@ -80,10 +81,25 @@ check_plugin_resource() {
         SETUP_MESSAGE="$output"
         return 2
     fi
-    if jq -e --arg name "$name" 'any(.[]; .name == $name or .fullName == $name)' \
-        <<< "$output" >/dev/null; then
+    if ! jq -e 'type == "array" and all(.[]; type == "object" and
+        (.name | type == "string" and length > 0) and
+        (.fullName | type == "string" and length > 0) and
+        (.managed | type == "boolean") and (.source | type == "string" and length > 0) and
+        (.installedFrom == null or (.installedFrom | type == "string")) and
+        (.marketplace == null or (.marketplace | type == "string")))' \
+        <<< "$output" >/dev/null 2>&1; then
+        SETUP_MESSAGE='Invalid Copilot plugin inventory.'
+        return 2
+    fi
+    if copilot_plugin_install_match "$output" "$source" "$name"; then
         SETUP_MESSAGE="$name is installed"
         return 0
+    else
+        local match_status=$?
+        if [[ "$match_status" != "1" ]]; then
+            SETUP_MESSAGE="Cannot determine install source for $name."
+            return 2
+        fi
     fi
     SETUP_MESSAGE="$name is not installed"
     return 1
@@ -95,6 +111,12 @@ check_marketplace_resource() {
     repository="$(jq -r '.repository' <<< "$resource")"
     if ! output="$("$(setup_bin copilot-marketplace)" list --json 2>&1)"; then
         SETUP_MESSAGE="$output"
+        return 2
+    fi
+    if ! jq -e 'type == "array" and all(.[]; type == "object" and
+        (.name | type == "string") and (.repository | type == "string"))' \
+        <<< "$output" >/dev/null 2>&1; then
+        SETUP_MESSAGE='Invalid Copilot marketplace inventory.'
         return 2
     fi
     if jq -e --arg name "$name" --arg repository "$repository" \
