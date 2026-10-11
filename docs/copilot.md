@@ -19,7 +19,7 @@ executable in `bin/`.
 
 Wraps `copilot` and adds:
 
-- **Automatic session resume** for the current folder — a single session
+- **Automatic session resume** for the current repository/branch — a single session
   resumes automatically, multiple show a picker, and a lone named session
   auto-resumes. Control it with `--no-resume`, `--resume-latest`,
   `--resume-session <id>`, `--no-auto-resume`, and `--include-unnamed`.
@@ -134,7 +134,17 @@ than installing or registering something based on a failed lookup.
 
 ## Session discovery and filtering
 
-`copilot-session list` defaults to the current directory; `--all` is explicit
+`copilot-session list` defaults to the single GitHub `origin` repository and
+the exact checked-out branch, so sessions remain visible after worktree moves.
+HTTPS, SCP-style SSH, and `ssh://git@github.com/` origins normalize to
+`owner/repository` (case-insensitive repository identity; case-sensitive branch).
+Both session identity fields must be present to match across directories.
+Incomplete metadata and unresolved current identity fall back to the recorded
+current directory, but any known conflicting repository/branch excludes a
+candidate. Automatic resume prefers complete identity matches over local legacy
+candidates and preserves newest-first ordering within that set.
+Multiple origins, detached HEAD, and unsupported remotes do not establish a
+repository identity. `--all` is explicit
 global discovery and `--id` remains an exact, directory-independent lookup.
 List and select share case-insensitive `--repository`, `--branch`, `--cwd`,
 and `--summary` glob filters, combined with AND. An explicit `--cwd` replaces

@@ -107,11 +107,10 @@ _shm_is_ignored_name() {
 # Uses the parsed resume flags in the caller's scope.
 _shm_resolve_resume() {
     local resume_latest="$1" show_picker="$2" include_unnamed="$3" selector="$4"
-    local cwd branch
-    cwd="$(pwd -P)"
-    branch="$(copilot_current_branch)"
+    local _SCOPE_CWD _SCOPE_REPOSITORY _SCOPE_BRANCH
+    copilot_session_scope
 
-    # Collect cwd-filtered sessions (newest first), dropping ignored/undated ones.
+    # Collect scoped sessions (newest first), dropping ignored/undated ones.
     local ids=() names=() branches=() candidate_rows=() sessions_out
     sessions_out="$(copilot_sessions)" || return 1
     local id display s_cwd s_branch s_repo created updated ecount esize path
@@ -126,11 +125,28 @@ _shm_resolve_resume() {
     local count=${#ids[@]}
     [[ "$count" -eq 0 ]] && return 0
 
-    # Prefer sessions matching the current git branch, if any match.
-    if [[ -n "$branch" ]]; then
+    # Prefer complete origin/branch matches over directory-only legacy sessions.
+    if [[ -n "$_SCOPE_REPOSITORY" ]]; then
+        local identity_rows=() identity_ids=() identity_names=() identity_branches=() i
+        for i in "${!ids[@]}"; do
+            IFS="$SHM_FS" read -r id display s_cwd s_branch s_repo created updated ecount esize path <<<"${candidate_rows[i]}"
+            if [[ -n "$s_repo" && "${s_repo,,}" == "${_SCOPE_REPOSITORY,,}" ]] &&
+               test "$s_branch" = "$_SCOPE_BRANCH"; then
+                identity_ids+=("${ids[i]}"); identity_names+=("${names[i]}")
+                identity_branches+=("${branches[i]}"); identity_rows+=("${candidate_rows[i]}")
+            fi
+        done
+        if [[ ${#identity_ids[@]} -gt 0 ]]; then
+            ids=("${identity_ids[@]}"); names=("${identity_names[@]}")
+            branches=("${identity_branches[@]}"); candidate_rows=("${identity_rows[@]}")
+        fi
+    fi
+
+    # Retain branch preference for incomplete directory-only metadata.
+    if [[ -n "$_SCOPE_BRANCH" ]]; then
         local m_ids=() m_names=() m_branches=() m_rows=() i
         for i in "${!ids[@]}"; do
-            if [[ "${branches[$i]}" == "$branch" ]]; then
+            if test "${branches[$i]}" = "$_SCOPE_BRANCH"; then
                 m_ids+=("${ids[$i]}"); m_names+=("${names[$i]}"); m_branches+=("${branches[$i]}")
                 m_rows+=("${candidate_rows[$i]}")
             fi
