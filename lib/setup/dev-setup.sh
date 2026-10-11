@@ -80,6 +80,12 @@ check_plugin_resource() {
         SETUP_MESSAGE="$output"
         return 2
     fi
+    if ! jq -e 'type == "array" and all(.[]; type == "object" and
+        (.name | type == "string") and (.fullName | type == "string"))' \
+        <<< "$output" >/dev/null 2>&1; then
+        SETUP_MESSAGE='Invalid Copilot plugin inventory.'
+        return 2
+    fi
     if jq -e --arg name "$name" 'any(.[]; .name == $name or .fullName == $name)' \
         <<< "$output" >/dev/null; then
         SETUP_MESSAGE="$name is installed"
@@ -95,6 +101,12 @@ check_marketplace_resource() {
     repository="$(jq -r '.repository' <<< "$resource")"
     if ! output="$("$(setup_bin copilot-marketplace)" list --json 2>&1)"; then
         SETUP_MESSAGE="$output"
+        return 2
+    fi
+    if ! jq -e 'type == "array" and all(.[]; type == "object" and
+        (.name | type == "string") and (.repository | type == "string"))' \
+        <<< "$output" >/dev/null 2>&1; then
+        SETUP_MESSAGE='Invalid Copilot marketplace inventory.'
         return 2
     fi
     if jq -e --arg name "$name" --arg repository "$repository" \

@@ -19,8 +19,9 @@ EOF
 
 # parse_plugin_list — read `copilot plugin list` and emit "name<TAB>fullname<TAB>marketplace<TAB>version".
 parse_plugin_list() {
-    local exe; exe="$(resolve_copilot)"
-    "$exe" plugin list 2>&1 | while IFS= read -r line; do
+    local output line
+    output="$(copilot_discover plugin list)" || return $?
+    while IFS= read -r line; do
         if [[ "$line" =~ ^[[:space:]]+•[[:space:]]+(.+)[[:space:]]+\(v(.+)\)[[:space:]]*$ ]]; then
             local full="${BASH_REMATCH[1]}" version="${BASH_REMATCH[2]}"
             full="${full%"${full##*[![:space:]]}"}"   # rtrim
@@ -30,7 +31,7 @@ parse_plugin_list() {
             fi
             printf '%s%s%s%s%s%s%s\n' "$name" "$SHM_FS" "$full" "$SHM_FS" "$marketplace" "$SHM_FS" "$version"
         fi
-    done
+    done <<< "$output"
 }
 
 cmd="${1:-}"; shift || true
@@ -50,7 +51,8 @@ case "$cmd" in
                 *) pattern="$a" ;;
             esac
         done
-        mapfile -t rows < <(parse_plugin_list)
+        inventory="$(parse_plugin_list)" || exit $?
+        mapfile -t rows <<< "$inventory"
         # Filter by name or fullname glob.
         filtered=()
         for row in "${rows[@]:-}"; do
@@ -85,11 +87,12 @@ case "$cmd" in
         check="$source_arg"
         if [[ "$source_arg" =~ ^(.+)@ ]]; then check="${BASH_REMATCH[1]}"
         elif [[ "$source_arg" =~ /([^/#]+)(#|$) ]]; then check="${BASH_REMATCH[1]}"; fi
+        inventory="$(parse_plugin_list)" || exit $?
         while IFS="$SHM_FS" read -r p_name p_full _; do
             if [[ "$p_name" == "$check" || "$p_full" == "$source_arg" ]]; then
                 log_verbose "Plugin '$p_full' appears to be installed."
             fi
-        done < <(parse_plugin_list)
+        done <<< "$inventory"
         "$exe" plugin install "$source_arg" || die "Failed to install plugin: $source_arg"
         ;;
     update)

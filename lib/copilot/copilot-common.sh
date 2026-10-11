@@ -80,6 +80,20 @@ resolve_copilot() {
     printf '%s\n' "$exe"
 }
 
+# Capture completion before parsing: failed native output is never inventory.
+copilot_discover() {
+    local exe output status
+    exe="$(resolve_copilot)" || return 1
+    if output="$("$exe" "$@" 2>&1)"; then
+        printf '%s\n' "$output"
+    else
+        status=$?
+        log_error "copilot $* failed (exit $status)."
+        [[ -z "$output" ]] || printf '%s\n' "$output" >&2
+        return "$status"
+    fi
+}
+
 # copilot_ws_field FILE KEY — print a decoded top-level YAML scalar.
 copilot_ws_field() {
     local file="$1" key="$2"
