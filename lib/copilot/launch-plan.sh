@@ -70,6 +70,11 @@ Approval and output:
 MCP:
   --enable-mcp-server <n>  Force a server on and forward the native enable flag.
   --disable-mcp-server <n> Force a server off for this launch.
+  --additional-mcp-config <JSON|@path>  Explicit remote configuration (repeatable).
+  --mcp-github-auth <server=origin>     Scoped native GitHub auth (repeatable).
+    Requires a named explicit HTTP/SSE server at the approved HTTPS origin.
+    HTTP is allowed only for literal 127.0.0.1 or [::1]. Never include credentials.
+    Plans do not authenticate; explicit config remains verbatim in returned plans.
 
 Convenience passthrough (forwarded to copilot):
   --model, --reasoning-effort, --agent, --mode, --context, --add-dir,
@@ -208,6 +213,7 @@ build_launch_plan() {
     local session_id_present=0
     local no_allow_all=0 no_experimental=0 no_deny=0
     local assisted_approval=0
+    local additional_mcp=() mcp_github_auth=()
     local enable_mcp=() disable_mcp=() fwd=() passthrough_args=() saw_ddash=0
 
     while [[ $# -gt 0 ]]; do
@@ -249,6 +255,16 @@ build_launch_plan() {
             --disable-mcp-server)
                 [[ $# -ge 2 ]] || die '--disable-mcp-server requires a server name.'
                 disable_mcp+=("$2"); shift 2 ;;
+            --additional-mcp-config)
+                [[ $# -ge 2 && -n "$2" ]] || die '--additional-mcp-config requires JSON or @path.'
+                additional_mcp+=("$2"); fwd+=("$1" "$2"); shift 2 ;;
+            --additional-mcp-config=*)
+                additional_mcp+=("${1#*=}"); fwd+=(--additional-mcp-config "${1#*=}"); shift ;;
+            --mcp-github-auth)
+                [[ $# -ge 2 && -n "$2" ]] || die '--mcp-github-auth requires server=origin.'
+                mcp_github_auth+=("$2"); fwd+=("$1" "$2"); shift 2 ;;
+            --mcp-github-auth=*)
+                mcp_github_auth+=("${1#*=}"); fwd+=(--mcp-github-auth "${1#*=}"); shift ;;
             --name)
                 [[ $# -ge 2 ]] || die '--name requires a value.'
                 name="$2"; shift 2 ;;
@@ -281,6 +297,10 @@ build_launch_plan() {
         [[ ${#fwd[@]} -gt 0 ]] && COPILOT_ARGS+=("${fwd[@]}")
         [[ ${#passthrough_args[@]} -gt 0 ]] && COPILOT_ARGS+=("${passthrough_args[@]}")
         return 0
+    fi
+
+    if [[ ${#mcp_github_auth[@]} -gt 0 ]]; then
+        _shm_validate_mcp_github_auth additional_mcp mcp_github_auth || return $?
     fi
 
     # Defaults.
@@ -328,6 +348,33 @@ build_launch_plan() {
     # Arbitrary passthrough args (after --).
     [[ ${#passthrough_args[@]} -gt 0 ]] && COPILOT_ARGS+=("${passthrough_args[@]}")
     return 0
+}
+
+_shm_validate_mcp_github_auth() {
+    local -n _configs="$1" _scopes="$2"
+    require_cmd node
+    local helper value
+    helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mcp-auth.js"
+    {
+        for value in "${_configs[@]}"; do printf 'config\0%s\0' "$value"; done
+        for value in "${_scopes[@]}"; do printf 'auth\0%s\0' "$value"; done
+    } | COPILOT_AUTH_HOME="$(copilot_home)" node "$helper"
+}
+
+# Preview diagnostics are not the reusable plan: redact inline MCP configuration.
+copilot_preview_args() {
+    local value redact_next=0
+    for value in "${COPILOT_ARGS[@]}"; do
+        if [[ "$redact_next" == "1" ]]; then
+            [[ "$value" == @* ]] || value='<inline MCP config redacted>'
+            redact_next=0
+        elif [[ "$value" == --additional-mcp-config ]]; then
+            redact_next=1
+        elif [[ "$value" == --additional-mcp-config=* && "$value" != --additional-mcp-config=@* ]]; then
+            value='--additional-mcp-config=<inline MCP config redacted>'
+        fi
+        printf ' %q' "$value"
+    done
 }
 
 # _shm_apply_mcp_autoconnect ENABLE_ARRAY DISABLE_ARRAY — append --disable-mcp-server
