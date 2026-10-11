@@ -101,3 +101,17 @@ ids() { jq -r 'map(.id) | join(",")'; }
     [ "$status" -eq 0 ]
     [[ "$output" == *conflict* ]]
 }
+
+@test "detached HEAD falls back to directory but rejects a known conflicting repository" {
+    git -c user.name=Fixture -c user.email=fixture@example.invalid commit --allow-empty -qm fixture
+    git switch --detach -q
+    fixture local owner/repo main "$PWD"
+    fixture conflicting other/repo main "$PWD"
+    fixture moved owner/repo main /old/worktree
+    run copilot-session list --json
+    [ "$status" -eq 0 ]
+    [ "$(printf '%s' "$output" | ids)" = local ]
+    run copilot-launch-plan --json
+    [ "$status" -eq 0 ]
+    [[ "$output" == *local* && "$output" != *conflicting* && "$output" != *moved* ]]
+}

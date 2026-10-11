@@ -127,7 +127,7 @@ _shm_resolve_resume() {
     [[ "$count" -eq 0 ]] && return 0
 
     # Prefer complete origin/branch matches over directory-only legacy sessions.
-    if [[ -n "$_SCOPE_REPOSITORY" ]]; then
+    if [[ -n "$_SCOPE_REPOSITORY" && -n "$_SCOPE_BRANCH" ]]; then
         local identity_rows=() identity_ids=() identity_names=() identity_branches=() i
         for i in "${!ids[@]}"; do
             IFS="$SHM_FS" read -r id display s_cwd s_branch s_repo created updated ecount esize path <<<"${candidate_rows[i]}"

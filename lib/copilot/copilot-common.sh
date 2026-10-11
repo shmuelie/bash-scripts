@@ -266,7 +266,6 @@ copilot_session_scope() {
     _SCOPE_CWD="$(pwd -P)"
     _SCOPE_BRANCH="$(copilot_current_branch)"
     _SCOPE_REPOSITORY=''
-    [[ -n "$_SCOPE_BRANCH" ]] || return 0
     local -a urls=()
     mapfile -t urls < <(git config --get-all remote.origin.url 2>/dev/null || true)
     if [[ ${#urls[@]} -eq 1 ]]; then

@@ -143,8 +143,9 @@ Incomplete metadata and unresolved current identity fall back to the recorded
 current directory, but any known conflicting repository/branch excludes a
 candidate. Automatic resume prefers complete identity matches over local legacy
 candidates and preserves newest-first ordering within that set.
-Multiple origins, detached HEAD, and unsupported remotes do not establish a
-repository identity. `--all` is explicit
+Multiple origins and unsupported remotes do not establish a repository identity.
+Detached HEAD cannot establish a complete scope, but a known origin still
+excludes conflicting repositories during directory fallback. `--all` is explicit
 global discovery and `--id` remains an exact, directory-independent lookup.
 List and select share case-insensitive `--repository`, `--branch`, `--cwd`,
 and `--summary` glob filters, combined with AND. An explicit `--cwd` replaces
