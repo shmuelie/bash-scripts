@@ -124,6 +124,17 @@ EOF
     no_native_calls
 }
 
+@test "worktree creation completes navigation opt-out and explicit approval in both shells" {
+    for shell in bash zsh; do
+        for command in git-worktree-new git-worktree-add; do
+            complete_for "$shell" "$command" --
+            has_candidate --stay-in-directory
+            has_candidate --confirm
+        done
+    done
+    no_native_calls
+}
+
 @test "enumerated option values are identical in both shells" {
     for shell in bash zsh; do
         complete_for "$shell" package-update --provider ''

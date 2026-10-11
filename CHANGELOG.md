@@ -23,6 +23,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Breaking interactive default:** installed Bash/zsh `git-worktree-new` and
+  `git-worktree-add` wrappers enter successfully created worktrees. Use
+  `--stay-in-directory` per invocation or installer `--no-worktree-navigation`
+  to opt out. Executables and noninteractive scripts retain print-path behavior.
+- Added explicit `--confirm` creation approval; preview, failure, and declined
+  confirmation never navigate.
 - Bash and zsh completion for every public command, with operation-specific
   flags and values, quoted paths, safe canonical Git/session discovery, and
   fresh-shell installer activation including zsh autoload.

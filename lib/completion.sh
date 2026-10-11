@@ -29,8 +29,8 @@ _shm_completion_contract() {
     local repo='--path -C' target='-C --repository-path --path'
     local filters='--id --repository --branch --cwd --summary --updated-before --older-than'
     case "$_shm_cmd" in
-        git-worktree-add) _shm_options+=" $repo --worktree-path $preview $verbose" ;;
-        git-worktree-new) _shm_options+=" $repo --worktree-path -k --kind -u --user --no-prefix $preview $verbose" ;;
+        git-worktree-add) _shm_options+=" $repo --worktree-path --stay-in-directory --confirm $preview $verbose" ;;
+        git-worktree-new) _shm_options+=" $repo --worktree-path -k --kind -u --user --no-prefix --stay-in-directory --confirm $preview $verbose" ;;
         git-worktree-switch) _shm_options+=" $target" ;;
         git-worktree-remove) _shm_options+=" $target --keep-branch --delete-branch --delete-branch=true --delete-branch=false --delete-branch=1 --delete-branch=0 --force --confirm $preview $verbose" ;;
         git-worktree-lock) _shm_options+=" $target --reason $preview $verbose" ;;

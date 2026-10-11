@@ -21,6 +21,7 @@ MARK_END="# <<< bash-scripts <<<"
 method='symlink'
 prefix="${HOME}/.local/bin"
 do_completions=1
+do_worktree_navigation=1
 uninstall=0
 update=0
 rc_override=''
@@ -43,6 +44,8 @@ Options:
   --prefix DIR            Symlink target directory (default: ~/.local/bin).
   --rc FILE               Shell rc file to edit (default: ~/.zshrc or ~/.bashrc).
   --no-completions        Do not wire up shell completions.
+  --no-worktree-navigation
+                          Do not enable interactive worktree navigation wrappers.
   --update                git pull the repo, then refresh the install.
   --uninstall             Remove symlinks and the rc block this installer added.
   --install-deps          Opt in to package-manager dependency installation.
@@ -59,6 +62,7 @@ while [[ $# -gt 0 ]]; do
         --prefix) prefix="$2"; shift 2 ;;
         --rc) rc_override="$2"; shift 2 ;;
         --no-completions) do_completions=0; shift ;;
+        --no-worktree-navigation) do_worktree_navigation=0; shift ;;
         --update) update=1; shift ;;
         --uninstall) uninstall=1; shift ;;
         --install-deps) install_deps=1; shift ;;
@@ -110,6 +114,7 @@ if ! REPO="$(resolve_repo)"; then
     fi
     reexec=(--method "$method" --prefix "$prefix")
     [[ "$do_completions" == "0" ]] && reexec+=(--no-completions)
+    [[ "$do_worktree_navigation" == "0" ]] && reexec+=(--no-worktree-navigation)
     [[ "$uninstall" == "1" ]] && reexec+=(--uninstall)
     [[ "$update" == "1" ]] && reexec+=(--update)
     [[ "$install_deps" == "1" ]] && reexec+=(--install-deps --deps "$deps_tier")
@@ -205,6 +210,9 @@ build_rc_block() {
     if [[ "$method" == "path" ]]; then
         # shellcheck disable=SC2016  # literal $PATH is intended for the rc file
         printf 'export PATH="%s/bin:$PATH"\n' "$quoted_repo"
+    fi
+    if [[ "$do_worktree_navigation" == 1 ]]; then
+        printf 'case "$-" in *i*) source "%s/lib/git/worktree-navigation.sh" "%s" ;; esac\n' "$quoted_repo" "$quoted_repo"
     fi
     if [[ "$do_completions" == "1" ]]; then
         if [[ "$kind" == "zsh" ]]; then

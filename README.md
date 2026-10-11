@@ -50,7 +50,8 @@ cd bash-scripts
 ```
 
 `install.sh` options: `--prefix DIR` (symlink target, default `~/.local/bin`),
-`--rc FILE` (shell rc to edit), `--no-completions`, `--update`,
+`--rc FILE` (shell rc to edit), `--no-completions`,
+`--no-worktree-navigation`, `--update`,
 `--install-deps`, `--deps required|all`, `--dry-run`, and `--uninstall`.
 Dependency installation is opt-in and uses a detected apt, dnf/yum, pacman,
 zypper, or Homebrew package manager. The `required` tier covers bash, git, and
@@ -106,6 +107,12 @@ local branch after successful removal, including unmerged branches. Use
 preview both operations, and `--confirm` to approve them separately. Remote
 branches are not deleted.
 
+**Interactive navigation migration:** after installing and opening a new
+Bash/zsh shell, `git-worktree-new` and `git-worktree-add` enter a successfully
+created worktree by default. Use `--stay-in-directory` per invocation, or install
+with `--no-worktree-navigation` to disable these wrappers. Executables and
+noninteractive scripts still print the target path without changing directory.
+
 ## Conventions
 
 - **Commands are kebab-case executables** in `bin/` (e.g. `git-worktree-new`).
@@ -113,12 +120,14 @@ branches are not deleted.
   equivalent of PowerShell's `-WhatIf`).
 - **`--json`** emits machine-readable output where a command supports it;
   otherwise a human-readable table or summary is printed.
-- Commands that would change the shell's directory (like `Set-Location` in
-  PowerShell) instead **print the target path**, so you can use them with `cd`:
+- Executables that would change the shell's directory (like `Set-Location` in
+  PowerShell) **print the target path**, so scripts can use them with `cd`.
+  The installed interactive wrappers for worktree creation additionally navigate:
 
   ```bash
   cd "$(git-worktree-switch main)"
-  cd "$(git-worktree-new my-feature)"
+  git-worktree-new my-feature                 # interactive: create and enter
+  git-worktree-new --stay-in-directory other  # create without entering
   ```
 
 ## Requirements

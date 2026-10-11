@@ -36,13 +36,42 @@ executable in `bin/`. Add `bin/` to your `PATH` first.
 ## Directory changes
 
 A child process cannot change its parent shell's working directory, so commands
-that would `Set-Location` in PowerShell instead print the target path:
+that would `Set-Location` in PowerShell print the target path for scripts:
 
 ```bash
 cd "$(git-worktree-switch main)"
 cd "$(git-worktree-new my-feature)"
 cd "$(git-repo-new https://github.com/owner/repo)"
 ```
+
+The installer additionally sources same-name `git-worktree-new` and
+`git-worktree-add` wrappers **only in interactive Bash/zsh shells**. They enter
+the worktree after successful creation and still print its path. Use
+`--stay-in-directory` to opt out, or `command git-worktree-new ...` / the
+executable path to bypass a wrapper. `--confirm` asks before creation; a declined
+confirmation, preview, failed creation, or empty destination never changes the
+calling directory. Relative destinations remain relative to the selected
+repository, not the unrelated caller directory.
+
+```bash
+git-worktree-new my-feature
+git-worktree-add --stay-in-directory existing-branch
+./install.sh --no-worktree-navigation
+```
+
+Manual activation:
+
+```bash
+source /path/to/bash-scripts/lib/git/worktree-navigation.sh /path/to/bash-scripts
+```
+
+Reinstall with `--no-worktree-navigation` to remove managed activation; restart
+existing shells to unload previously defined functions. This option is
+independent of `--no-completions`. Noninteractive shells, command substitutions,
+and direct executable calls retain the print-path contract. A wrapper invoked
+inside a command substitution or pipeline can change only its subshell, so call
+it directly when navigation is intended. No legacy Bash navigation flags
+existed; no PowerShell flag aliases are introduced.
 
 ## Layout
 
