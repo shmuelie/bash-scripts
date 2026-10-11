@@ -17,7 +17,7 @@ setup() {
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$COPILOT_ARGS_LOG"
 case "$1 $2" in
-  "plugin list") printf '  • dotnet-skills@dotnet-agent-skills (v1.2.3)\n  • local-plugin (v0.1.0)\n' ;;
+  "plugin list") printf '[{"name":"dotnet-skills","marketplace":"dotnet-agent-skills","version":"1.2.3","enabled":true,"source":"marketplace"},{"name":"local-plugin","version":"0.1.0","enabled":true,"source":"direct","installedFrom":"owner/local-plugin"}]\n' ;;
   "plugin marketplace")
     case "$3" in
       list) printf '  ◆ dotnet-agent-skills (GitHub: dotnet/skills)\n  • community (URL: https://example.com/mp.json)\n' ;;

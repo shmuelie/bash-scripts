@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Resource validation and application helpers for dev-setup.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../copilot/copilot-common.sh"
 
 validate_setup_config() {
     jq -e '
@@ -86,10 +87,15 @@ check_plugin_resource() {
         SETUP_MESSAGE='Invalid Copilot plugin inventory.'
         return 2
     fi
-    if jq -e --arg name "$name" 'any(.[]; .name == $name or .fullName == $name)' \
-        <<< "$output" >/dev/null; then
+    if copilot_plugin_install_match "$output" "$source" "$name"; then
         SETUP_MESSAGE="$name is installed"
         return 0
+    else
+        local match_status=$?
+        if [[ "$match_status" != "1" ]]; then
+            SETUP_MESSAGE="Cannot determine install source for $name."
+            return 2
+        fi
     fi
     SETUP_MESSAGE="$name is not installed"
     return 1

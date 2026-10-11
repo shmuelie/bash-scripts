@@ -94,6 +94,104 @@ copilot_discover() {
     fi
 }
 
+# Current native JSON is an array, not a map or a wrapper object.
+copilot_plugins_json() {
+    require_cmd jq
+    local exe output status normalized line section=managed records='' full name marketplace version enabled source
+    exe="$(resolve_copilot)" || return 1
+    if output="$("$exe" plugin list --json 2>&1)"; then
+        [[ -n "${output//[[:space:]]/}" ]] || { printf '[]\n'; return 0; }
+        if ! normalized="$(jq -cs '
+            def nonempty: type == "string" and test("\\S");
+            def optional_string: . == null or type == "string";
+            if length != 1 then error("Expected one JSON array") else .[0] end |
+            if type != "array" or (all(.[];
+                type == "object" and (.name | nonempty) and (.source | nonempty) and
+                (.enabled | type == "boolean") and
+                (.marketplace | optional_string) and (.version | optional_string) and
+                (.installedFrom | optional_string)) | not)
+            then error("Invalid plugin inventory schema") else
+                map({name, fullName:(.name + (if (.marketplace // "") != ""
+                    then "@" + .marketplace else "" end)),
+                    marketplace:(.marketplace // null), version:(.version // ""),
+                    enabled, source, installedFrom:(.installedFrom // null),
+                    managed:((.source | ascii_downcase) != "builtin" and
+                        (.source | ascii_downcase) != "plugin-dir")})
+            end' <<< "$output" 2>/dev/null)"; then
+            log_error 'copilot plugin list --json returned invalid JSON or schema.'
+            return 1
+        fi
+        printf '%s\n' "$normalized"
+        return 0
+    else
+        status=$?
+    fi
+    local unsupported=0 lower
+    while IFS= read -r line; do
+        lower="${line,,}"
+        if [[ "$lower" =~ (unexpected|unknown|unrecognized|invalid).*--json|--json.*(unexpected|unknown|unrecognized|invalid) ]]; then
+            unsupported=1
+        fi
+    done <<< "$output"
+    if [[ "$unsupported" == "0" ]]; then
+        log_error "copilot plugin list --json failed (exit $status)."
+        [[ -z "$output" ]] || printf '%s\n' "$output" >&2
+        return "$status"
+    fi
+    output="$(copilot_discover plugin list)" || return $?
+    while IFS= read -r line; do
+        case "$line" in
+            *'Built-in plugins:') section=builtin; continue ;;
+            *'External Plugins (via --plugin-dir):') section=plugin-dir; continue ;;
+            '') section=managed; continue ;;
+        esac
+        if [[ "$line" =~ ^[[:space:]]+•[[:space:]]+(.+)[[:space:]]+\(v([^\)]+)\)([[:space:]]+\[disabled\])?[[:space:]]*$ ]]; then
+            full="${BASH_REMATCH[1]}" version="${BASH_REMATCH[2]}" enabled=true
+            [[ -z "${BASH_REMATCH[3]}" ]] || enabled=false
+            full="${full%"${full##*[![:space:]]}"}"
+            name="$full"; marketplace=''
+            if [[ "$full" =~ ^(.+)@(.+)$ ]]; then
+                name="${BASH_REMATCH[1]}"; marketplace="${BASH_REMATCH[2]}"
+            fi
+            source="$section"
+            [[ "$section" != managed || -z "$marketplace" ]] || source=marketplace
+            records+="$(jq -cn --arg name "$name" --arg full "$full" --arg mkt "$marketplace" \
+                --arg version "$version" --arg source "$source" --argjson enabled "$enabled" \
+                '{name:$name,fullName:$full,marketplace:(if $mkt=="" then null else $mkt end),
+                  version:$version,source:$source,enabled:$enabled,installedFrom:null,
+                  managed:($source!="builtin" and $source!="plugin-dir")}')"$'\n'
+        fi
+    done <<< "$output"
+    jq -cs '.' <<< "$records"
+}
+
+# Return 0 for the exact managed install, 1 for absent, 2 for ambiguous source.
+# Explicit names identify direct URL/archive requests but never relax source matching.
+copilot_plugin_install_match() {
+    local inventory="$1" request="$2" name="${3:-}" leaf
+    if [[ "$request" =~ ^[^@]+@[^@]+$ ]]; then
+        jq -e --arg request "$request" \
+            'any(.[]; .managed == true and .fullName == $request)' <<< "$inventory" >/dev/null
+        return $?
+    fi
+    if jq -e --arg request "$request" \
+        'any(.[]; .managed == true and .installedFrom == $request)' <<< "$inventory" >/dev/null; then
+        return 0
+    fi
+    if [[ -z "$name" ]]; then
+        leaf="${request%%#*}"; leaf="${leaf%/}"; name="${leaf##*/}"
+        [[ "$request" != *:* || "$request" == *://* ]] || name="${request##*:}"
+        name="${name%.tar.gz}"; name="${name%.zip}"; name="${name%.tgz}"; name="${name%.git}"
+    fi
+    if jq -e --arg name "$name" 'any(.[]; .managed == true and
+        ((.marketplace // "") == "") and .name == $name and
+        ((.installedFrom // "") == ""))' <<< "$inventory" >/dev/null; then
+        log_error "Cannot determine whether plugin '$name' is installed: native inventory did not report its install source."
+        return 2
+    fi
+    return 1
+}
+
 # copilot_ws_field FILE KEY — print a decoded top-level YAML scalar.
 copilot_ws_field() {
     local file="$1" key="$2"
