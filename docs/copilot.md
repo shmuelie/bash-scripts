@@ -264,6 +264,10 @@ where the Copilot CLI runs.
 Workspace scalar fields are decoded from plain, single-line or multiline
 quoted, literal-block, and folded-block YAML. Rename and merge operations safely
 quote updated values while preserving unrelated workspace metadata.
+Lookup and rewriting share block boundaries: mapping-looking text within a
+literal/folded scalar never shadows real fields. LF, CRLF, and CR line endings
+and the indentation of untouched fields are retained, including when a
+multiline name is renamed back to one line.
 
 ```bash
 copilot-session list --json
