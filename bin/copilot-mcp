@@ -81,30 +81,26 @@ case "$cmd" in
             else error("Invalid MCP server metadata") end' <<< "$raw" 2>/dev/null)"; then
             die 'copilot mcp list --json returned invalid JSON or schema.'
         fi
-        # Build normalized rows delimited by SHM_FS (US) so empty fields survive.
-        rows_text="$(jq -r '.[] | [.name,.type,(.command // ""),(.args // ""),
-            (.url // ""),.source,(.enabled | tostring),.tools] | join("\u001f")' <<< "$normalized")"
-        mapfile -t rows <<< "$rows_text"
+        mapfile -t rows < <(jq -c '.[]' <<< "$normalized")
         out=()
-        for r in "${rows[@]:-}"; do
-            [[ -z "$r" ]] && continue
-            IFS="$SHM_FS" read -r name type command args url src enabled tools <<< "$r"
+        for r in "${rows[@]}"; do
+            name="$(jq -r .name <<< "$r")"
+            src="$(jq -r .source <<< "$r")"
             # shellcheck disable=SC2053
             [[ "$name" == $pattern ]] || continue
             [[ -n "$source_filter" && "$src" != "$source_filter" ]] && continue
-            out+=("$name$SHM_FS$type$SHM_FS$command$SHM_FS$args$SHM_FS$url$SHM_FS$src$SHM_FS$enabled$SHM_FS$tools")
+            out+=("$r")
         done
         if [[ "$json" == "1" ]]; then
             if [[ ${#out[@]} -eq 0 ]]; then echo '[]'; else
-                printf '%s\n' "${out[@]}" | jq -R -s 'def nz: if .=="" then null else . end;
-                    split("\n") | map(select(length>0) | split("\u001f") |
-                    {name:.[0], type:(.[1]|nz), command:(.[2]|nz), args:(.[3]|nz),
-                     url:(.[4]|nz), source:(.[5]|nz), enabled:(.[6]=="true"), tools:.[7]})'
+                printf '%s\n' "${out[@]}" | jq -s '.'
             fi
         else
-            for r in "${out[@]:-}"; do
-                [[ -z "$r" ]] && continue
-                IFS="$SHM_FS" read -r name type command args url src enabled tools <<< "$r"
+            for r in "${out[@]}"; do
+                name="$(jq -r .name <<< "$r")"; type="$(jq -r .type <<< "$r")"
+                command="$(jq -r '.command // ""' <<< "$r")"; args="$(jq -r '.args // ""' <<< "$r")"
+                url="$(jq -r '.url // ""' <<< "$r")"; src="$(jq -r .source <<< "$r")"
+                enabled="$(jq -r .enabled <<< "$r")"; tools="$(jq -r .tools <<< "$r")"
                 printf '%-24s %-6s %-8s enabled=%s tools=%s %s\n' "$name" "$type" "$src" "$enabled" "$tools" "${url:-$command $args}"
             done
         fi

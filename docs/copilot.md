@@ -71,6 +71,12 @@ enable flag, or `--disable-mcp-server <name>` to force one off.
 
 ### Managed MCP configuration
 
+Registration accepts `--tools '*'` for all tools, `--tools ''` for none, or a
+comma-separated list such as `--tools read,write`. `--timeout` accepts
+1-4294967295 milliseconds. `copilot-mcp list --json` reports Boolean `enabled`
+and the exact `tools` filter; invalid native inventory is an error, not partial
+or empty success.
+
 `copilot-mcp add/remove` refuses native mutation when
 `$COPILOT_HOME/mcp-config.json` (default `~/.copilot/mcp-config.json`) is a
 symbolic link, including a dangling link. Manage the target directly instead;
@@ -78,6 +84,53 @@ the native CLI may replace the link during an atomic save. Ordinary or absent
 configuration files retain native behavior. `--dry-run`/`--whatif` previews do
 not inspect or change the target; removal accepts the preview flag before or
 after the server name.
+
+### Scoped GitHub authentication for remote MCP
+
+Repeat `--mcp-github-auth server=https://host[:port]` to approve independent
+server origins. Every server must be explicitly defined in
+`--additional-mcp-config JSON|@path` as HTTP or SSE with a matching origin.
+HTTPS is required, except HTTP on literal `127.0.0.1` or `[::1]`. Credentials,
+paths, queries, fragments, duplicate scopes, and mismatched origins are rejected
+before launch. `@~/file` resolves under `COPILOT_HOME`.
+
+```bash
+copilot-launch-plan --no-resume --additional-mcp-config @/path/to/mcp.json \
+  --mcp-github-auth example=https://mcp.example.com --json
+```
+
+Planning and previews never authenticate or acquire tokens. Human previews
+redact inline configuration, but reusable JSON plans retain the supplied
+configuration verbatim. Prefer a configuration file and do not embed or share
+credentials in plan output.
+
+### Fleet, routing, and retrieval
+
+`--fleet` requires a prompt (bare, `--prompt`, or `-p`) or an interactive prompt
+(`--interactive`/`-i`). `--auto-tier efficiency|balance|intelligence` works with
+an omitted model or `--model auto`. Repeat
+`--dynamic-retrieval skills=on|skills=off` to forward ordered native settings;
+the CLI persists these settings. `--mouse on|off` and `--no-mouse` are mutually
+exclusive. All combinations are validated before launch, including previews.
+
+The hidden compatibility flags `--prefer-version` and
+`--enable-reasoning-summaries` remain accepted; prefer-version also suppresses
+auto-update. `--no-eager-powershell-resolution` is Windows-only and is rejected
+on Linux without discovering or invoking PowerShell.
+
+### Plugin and marketplace inventories
+
+Plugin discovery prefers strict native JSON and falls back to the legacy text
+format only when the CLI explicitly rejects `--json`. Plugin objects preserve
+name, full marketplace identity, version, enabled state, source, original install
+source, and whether the entry is managed. Built-in and `--plugin-dir` entries
+are not managed installs. Exact source matching prevents same-named plugins
+from satisfying a different installation request; ambiguous direct-source
+entries fail closed.
+
+Plugin and marketplace native failures retain diagnostics and emit no inventory,
+even if partial output resembles valid data. Dependent setup checks stop rather
+than installing or registering something based on a failed lookup.
 
 ## Session discovery and filtering
 

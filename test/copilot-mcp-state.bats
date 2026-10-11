@@ -104,6 +104,14 @@ EOF
     [ "$output" = '[]' ]
 }
 
+@test "MCP JSON list preserves embedded line breaks and row separators in arguments" {
+    printf '%s\n' '{"mcpServers":{"fixture":{"type":"stdio","command":"example","args":["first\nsecond","\u001f"],"source":"user","enabled":false,"tools":""}}}' > "$RESPONSE"
+    run copilot-mcp list --json
+    [ "$status" -eq 0 ]
+    jq -e 'length==1 and .[0].args=="first\nsecond \u001f" and
+        .[0].enabled==false and .[0].tools=="" and .[0].source=="user"' <<< "$output"
+}
+
 @test "MCP tools timeout keep symlink protection and preview-only behavior" {
     ln -s "$WORK/missing" "$COPILOT_HOME/mcp-config.json"
     run copilot-mcp add synthetic --tools= --timeout 1
