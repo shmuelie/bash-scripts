@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `dev-tunnel` wraps Microsoft devtunnel 1.0.2115/compatible 1.x for account,
+  tunnel, port, access, token, default-selection, cluster/limit, and foreground
+  hosting/connection/diagnostic workflows, with offline previews, explicit
+  destructive approval, protected token output, and owned-process cancellation.
+- Bash/zsh completion and deterministic fake-CLI coverage for dev tunnels.
+
 ## [0.2.0] - 2026-10-11
 
 ### Fixed

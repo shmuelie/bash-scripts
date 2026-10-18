@@ -135,6 +135,26 @@ EOF
     no_native_calls
 }
 
+@test "dev tunnels complete nested operations protocols scopes and safe output without native calls" {
+    for shell in bash zsh; do
+        complete_for "$shell" dev-tunnel user ''
+        [ "$output" = $'login\nlogout\nshow' ]
+        complete_for "$shell" dev-tunnel port ''
+        [ "$output" = $'list\nshow\ncreate\nupdate\ndelete' ]
+        complete_for "$shell" dev-tunnel access create --
+        has_candidate --anonymous
+        has_candidate --scopes
+        complete_for "$shell" dev-tunnel host --protocol ''
+        [ "$output" = $'http\nhttps\nauto' ]
+        complete_for "$shell" dev-tunnel token --scopes ''
+        has_candidate manage:ports
+        complete_for "$shell" dev-tunnel token --
+        has_candidate --output-file
+        has_candidate --show-token
+    done
+    no_native_calls
+}
+
 @test "enumerated option values are identical in both shells" {
     for shell in bash zsh; do
         complete_for "$shell" package-update --provider ''

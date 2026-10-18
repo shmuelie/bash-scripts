@@ -6,7 +6,7 @@
 _shm_completion_commands() {
     printf '%s\n' \
         ado-npm-token copilot-launch-plan copilot-marketplace copilot-mcp \
-        copilot-plugin copilot-session copilot-session-maintenance dev-setup \
+        copilot-plugin copilot-session copilot-session-maintenance dev-setup dev-tunnel \
         dotnet-sdk-install dotnet-tool format-duration git-branch-list \
         git-branch-remove git-branch-switch git-config-set git-repo-new \
         git-repo-repair git-restore git-stale-branch git-stash-restore \
@@ -88,6 +88,34 @@ _shm_completion_contract() {
             case "$_shm_operation" in
                 list|browse) _shm_options+=' --json' ;;
                 remove) _shm_options+=" $preview" ;;
+            esac ;;
+        dev-tunnel)
+            case "$_shm_operation" in
+                '') _shm_subcommands='version user list show create update delete delete-all host connect port access token set unset clusters limits echo ping' ;;
+                user) _shm_subcommands='login logout show' ;;
+                port) _shm_subcommands='list show create update delete' ;;
+                access) _shm_subcommands='list create delete reset' ;;
+                *)
+                    _shm_options+=" $preview --json --yes --confirm --timeout"
+                    case "$_shm_operation" in
+                        user/login) _shm_options+=' --github --use-device-code-auth' ;;
+                        list) _shm_options+=' --labels --all-labels --limit' ;;
+                        create) _shm_options+=' --description --labels --expiration --allow-anonymous' ;;
+                        update) _shm_options+=' --description --add-labels --remove-labels --expiration' ;;
+                        host) _shm_options+=' --port-number --protocol --description --labels --expiration --allow-anonymous' ;;
+                        port/show|port/delete|access/list|access/reset) _shm_options+=' --port-number' ;;
+                        port/create) _shm_options+=' --port-number --protocol --description --labels' ;;
+                        port/update) _shm_options+=' --port-number --description --add-labels --remove-labels' ;;
+                        access/create) _shm_options+=' --port-number --anonymous --tenant --organization --repo --deny --scopes --expiration --index' ;;
+                        access/delete) _shm_options+=' --port-number --index' ;;
+                        token) _shm_options+=' --scopes --output-file --show-token' ;;
+                        clusters) _shm_options+=' --ping' ;;
+                        echo) _shm_options+=' --port --protocol --interface' ;;
+                        ping) _shm_options+=' --size --interval' ;;
+                    esac
+                    case "$_shm_operation" in
+                        host|connect|echo|ping|user/login) _shm_options="${_shm_options/ --json/}" ;;
+                    esac ;;
             esac ;;
         start-copilot|copilot-launch-plan)
             _shm_options+=' --no-resume --resume-latest --resume-session --no-auto-resume --show-picker --include-unnamed --defer-resume --selector --no-allow-all --no-experimental --no-default-deny-tools --assisted-approval --allow-all-tools --usage-output-file --enable-mcp-server --disable-mcp-server --model --reasoning-effort --agent --mode --context --add-dir --log-level --output-format --session-id --name -C --change-dir --plan'
@@ -174,6 +202,13 @@ _shm_completion_contract() {
 _shm_completion_value() {
     _shm_value=''
     case "$_shm_cmd:$1" in
+        dev-tunnel:--protocol)
+            if [[ "$_shm_operation" == echo ]]; then _shm_value='enum:http https ssh tcp udp'
+            else _shm_value='enum:http https auto'; fi ;;
+        dev-tunnel:--scopes) _shm_value='enum:create manage manage:ports host inspect connect' ;;
+        dev-tunnel:--output-file) _shm_value='file' ;;
+        dev-tunnel:--timeout|dev-tunnel:--port|dev-tunnel:--port-number|dev-tunnel:--interface|dev-tunnel:--description|dev-tunnel:--labels|dev-tunnel:--all-labels|dev-tunnel:--add-labels|dev-tunnel:--remove-labels|dev-tunnel:--expiration|dev-tunnel:--limit|dev-tunnel:--organization|dev-tunnel:--repo|dev-tunnel:--index|dev-tunnel:--size|dev-tunnel:--interval)
+            _shm_value=text ;;
         git-worktree-lock:--path|git-worktree-unlock:--path|git-worktree-move:--path) ;;
         git-*:-C|git-*:--path|git-*:--repository-path|git-*:--worktree-path|git-*:--root)
             _shm_value=directory ;;
@@ -225,6 +260,7 @@ _shm_completion_value() {
 
 _shm_completion_equals_allowed() {
     case "$_shm_cmd:$1" in
+        dev-tunnel:*) _shm_completion_value "$1"; [[ -n "$_shm_value" ]]; return $? ;;
         start-copilot:--model|copilot-launch-plan:--model|start-copilot:--change-dir|copilot-launch-plan:--change-dir|start-copilot:--prompt|copilot-launch-plan:--prompt|start-copilot:--interactive|copilot-launch-plan:--interactive|start-copilot:--auto-tier|copilot-launch-plan:--auto-tier|start-copilot:--dynamic-retrieval|copilot-launch-plan:--dynamic-retrieval|start-copilot:--mouse|copilot-launch-plan:--mouse|start-copilot:--additional-mcp-config|copilot-launch-plan:--additional-mcp-config|start-copilot:--mcp-github-auth|copilot-launch-plan:--mcp-github-auth|start-copilot:--prefer-version|copilot-launch-plan:--prefer-version|copilot-mcp:--tools|git-worktree-remove:--delete-branch) return 0 ;;
     esac
     return 1
@@ -232,6 +268,7 @@ _shm_completion_equals_allowed() {
 
 _shm_completion_repeatable() {
     case "$_shm_cmd:$1" in
+        dev-tunnel:--labels|dev-tunnel:--all-labels|dev-tunnel:--add-labels|dev-tunnel:--remove-labels|dev-tunnel:--scopes|dev-tunnel:--port-number) return 0 ;;
         package-update:--provider|package-update:--exclude-provider|git-worktree-update:--github-account|git-worktree-update-all:--github-account|git-worktree-update-all:--organization|git-worktree-update-all:--name|git-worktree-update-all:--exclude|git-sync:--github-account|copilot-mcp:--arg|copilot-mcp:--env|copilot-mcp:--header|start-copilot:--mcp-github-auth|copilot-launch-plan:--mcp-github-auth|start-copilot:--additional-mcp-config|copilot-launch-plan:--additional-mcp-config|start-copilot:--dynamic-retrieval|copilot-launch-plan:--dynamic-retrieval|start-copilot:--enable-mcp-server|copilot-launch-plan:--enable-mcp-server|start-copilot:--disable-mcp-server|copilot-launch-plan:--disable-mcp-server|start-copilot:--add-dir|copilot-launch-plan:--add-dir) return 0 ;;
     esac
     return 1
@@ -290,7 +327,14 @@ _shm_completion_prepare() {
             # Unknown switches have unknown arity: do not invent an operand.
             [[ "$arg" != -* ]] || { _shm_pending=none; break; }
         fi
-        if [[ -n "$_shm_subcommands" && -z "$_shm_operation" ]]; then
+        if [[ "$_shm_cmd" == dev-tunnel && -n "$_shm_subcommands" ]]; then
+            case " $_shm_subcommands " in
+                *" $arg "*)
+                    _shm_operation="${_shm_operation:+$_shm_operation/}$arg"
+                    _shm_completion_contract ;;
+                *) _shm_pending=none; break ;;
+            esac
+        elif [[ -n "$_shm_subcommands" && -z "$_shm_operation" ]]; then
             _shm_operation="$arg"
             case " $_shm_subcommands " in
                 *" $arg "*) _shm_completion_contract ;;
@@ -313,7 +357,7 @@ _shm_completion_prepare() {
                 _shm_equal_prefix="$arg="
                 _shm_cur="${_shm_cur#*=}"
             fi
-        elif [[ -n "$_shm_subcommands" && -z "$_shm_operation" && "$_shm_ended" == 0 ]]; then
+        elif [[ -n "$_shm_subcommands" && ( -z "$_shm_operation" || "$_shm_cmd" == dev-tunnel ) && "$_shm_ended" == 0 ]]; then
             _shm_kind=subcommands
         else
             _shm_completion_operand
