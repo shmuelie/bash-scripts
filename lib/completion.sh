@@ -120,6 +120,7 @@ _shm_completion_contract() {
         start-copilot|copilot-launch-plan)
             _shm_options+=' --no-resume --resume-latest --resume-session --no-auto-resume --show-picker --include-unnamed --defer-resume --selector --no-allow-all --no-experimental --no-default-deny-tools --assisted-approval --allow-all-tools --usage-output-file --enable-mcp-server --disable-mcp-server --model --reasoning-effort --agent --mode --context --add-dir --log-level --output-format --session-id --name -C --change-dir --plan'
             _shm_options+=' --prompt -p --interactive -i --fleet --auto-tier --dynamic-retrieval --mouse --no-mouse --additional-mcp-config --mcp-github-auth'
+            _shm_options+=' --remote --no-remote'
             if [[ "$_shm_cmd" == start-copilot ]]; then
                 _shm_options+=" --passthru $preview"
             else

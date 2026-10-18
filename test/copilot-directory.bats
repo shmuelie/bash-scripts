@@ -143,7 +143,7 @@ fixture() {
             --auto-tier intelligence --model auto --prompt $'first line\nsecond line' --json
         [ "$status" -eq 0 ]
         jq -e --arg cwd "$WORK/target" --arg config "$source" '
-            .cwd==$cwd and .args as $args |
+            .args as $args | .cwd==$cwd and
             $args[($args|index("--additional-mcp-config"))+1]==$config and
             $args[($args|index("-p"))+1]=="first line\nsecond line" and
             $args[($args|index("--auto-tier"))+1]=="intelligence" and

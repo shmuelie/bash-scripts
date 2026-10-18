@@ -13,6 +13,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   hosting/connection/diagnostic workflows, with offline previews, explicit
   destructive approval, protected token output, and owned-process cancellation.
 - Bash/zsh completion and deterministic fake-CLI coverage for dev tunnels.
+- Copilot remote control now requires an explicit request and one recognized
+  GitHub origin in the effective launch worktree; ineligible requests warn and
+  remain local, and explicit disabling always takes precedence.
 
 ## [0.2.0] - 2026-10-11
 

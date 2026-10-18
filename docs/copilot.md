@@ -56,7 +56,25 @@ start-copilot "fix" -- --model claude-opus-4.7 --reasoning-effort high
 copilot value-flags (`--model`, `--reasoning-effort`, `--agent`, `--mode`,
 `--context`, `--add-dir`, `--log-level`, `--output-format`, `--session-id`,
 `--name`, `-C`/`--change-dir`, `--plan`). A single bare argument is the autopilot
-**prompt**. Any other copilot flags go after `--`, which is forwarded verbatim.
+**prompt**. Any other copilot flags go after `--`; remote-control flags are
+normalized for eligibility even there.
+
+### Remote session control
+
+`--remote` opts into GitHub web/mobile control only when the effective launch
+directory is a Git worktree with exactly one recognized GitHub `origin` URL.
+HTTPS (`https://github.com/owner/repo[.git]`), SCP-style SSH
+(`git@github.com:owner/repo[.git]`), and
+`ssh://git@github.com/owner/repo[.git]` are supported. No network or login check
+is performed. Local-only, non-Git, non-GitHub, ambiguous, and unknown contexts
+produce a warning and `--no-remote` instead, leaving local sessions usable.
+
+`-C`/`--change-dir` controls this check. Resuming a session does not change the
+launch directory; stale recorded repository metadata cannot grant eligibility.
+Explicit `--no-remote` (or native `--no-remote-export`) always wins, including
+after `--`. Eligible repositories do not opt in automatically. Remote export
+and remote MCP authentication are separate features. Plans, `--passthru`, and
+`--dry-run` use the same gated arguments as a real launch.
 
 ### MCP autoConnect policy
 
