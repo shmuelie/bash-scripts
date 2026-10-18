@@ -76,6 +76,8 @@ Routing and initial prompt:
   --dynamic-retrieval <setting>  skills=on or skills=off (repeatable; CLI persists it).
   --mouse <on|off>          Native mouse setting.
   --no-mouse               Native no-mouse switch; cannot combine with --mouse.
+  --remote                 Request remote control; requires one GitHub origin.
+  --no-remote              Keep the session local (takes precedence).
 
 MCP:
   --enable-mcp-server <n>  Force a server on and forward the native enable flag.
@@ -442,7 +444,47 @@ build_launch_plan() {
 
     # Arbitrary passthrough args (after --).
     [[ ${#passthrough_args[@]} -gt 0 ]] && COPILOT_ARGS+=("${passthrough_args[@]}")
+    _shm_gate_remote
     return 0
+}
+
+# Check the actual native directory, not cached session repository metadata.
+# Resuming does not change the launch directory; native -C overrides do.
+_shm_gate_remote() {
+    local requested=0 disabled=0 value option='' directory="$COPILOT_CWD"
+    local filtered=() urls identity
+    for value in "${COPILOT_ARGS[@]}"; do
+        if [[ -n "$option" ]]; then
+            case "$option" in -C|--change-dir) directory="$value" ;; esac
+            filtered+=("$value"); option=''; continue
+        fi
+        case "$value" in
+            --remote) requested=1 ;;
+            --no-remote) disabled=1 ;;
+            --no-remote-export) disabled=1; filtered+=("$value") ;;
+            --change-dir=*) directory="${value#*=}"; filtered+=("$value") ;;
+            --deny-tool|--allow-tool|--deny-url|--allow-url|--add-dir|--model|--reasoning-effort|--agent|--mode|--context|--log-level|--output-format|--session-id|--name|--resume|--resume-session|--usage-output-file|--enable-mcp-server|--disable-mcp-server|--additional-mcp-config|--mcp-github-auth|--interactive|-i|--prompt|-p|--auto-tier|--dynamic-retrieval|--mouse|--prefer-version|-C|--change-dir)
+                option="$value"; filtered+=("$value") ;;
+            *) filtered+=("$value") ;;
+        esac
+    done
+    if [[ "$disabled" == 1 ]]; then
+        filtered+=(--no-remote)
+    elif [[ "$requested" == 1 ]]; then
+        if have_cmd git &&
+           [[ "$(git -C "$directory" rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] &&
+           urls="$(git -C "$directory" config --get-all remote.origin.url 2>/dev/null)" &&
+           [[ -n "$urls" && "$urls" != *$'\n'* ]] &&
+           [[ "${urls,,}" == https://github.com/* || "${urls,,}" == git@github.com:* ||
+              "${urls,,}" == ssh://git@github.com/* ]] &&
+           identity="$(copilot_origin_identity "$urls")" && [[ -n "$identity" ]]; then
+            filtered+=(--remote)
+        else
+            log_warn 'Remote control not enabled: the effective launch directory needs a Git worktree with one recognized upstream GitHub origin. Continuing locally.'
+            filtered+=(--no-remote)
+        fi
+    fi
+    COPILOT_ARGS=("${filtered[@]}")
 }
 
 _shm_validate_mcp_github_auth() {

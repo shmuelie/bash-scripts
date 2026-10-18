@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Copilot remote control now requires an explicit request and one recognized
+  GitHub origin in the effective launch worktree; ineligible requests warn and
+  remain local, and explicit disabling always takes precedence.
+
 ## [0.2.0] - 2026-10-11
 
 ### Fixed
