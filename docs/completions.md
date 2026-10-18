@@ -1,6 +1,6 @@
 # Shell completion
 
-All 60 public commands in `bin/` have Bash and zsh registrations. Completion
+All 61 public commands in `bin/` have Bash and zsh registrations. Completion
 uses shared, static command contracts in `lib/completion.sh`, not native help
 output. It suggests only supported options for the selected operation; for
 example, `copilot-mcp list` offers `--json`, but not `--dry-run` or
@@ -68,6 +68,7 @@ where the command actually accepts them.
 
 | Public commands | Subcommands and specialized completion |
 | --- | --- |
+| `dev-tunnel` | Nested `user`, `port`, and `access` operations, lifecycle and foreground commands, repeatable labels/ports/scopes, protocol/scope values, and protected token output paths. No CLI discovery or service queries. |
 | `git-branch-list`, `git-branch-switch`, `git-branch-remove`, `git-tag-list` | Local/cached remote branch names, tags and configured remotes; switch `--track` uses cached remote branches, while `--create` leaves the new name free-form. |
 | `git-worktree-add`, `git-worktree-new`, `git-worktree-list`, `git-worktree-current`, `git-worktree-root`, `git-worktree-path`, `git-worktree-switch`, `git-worktree-remove`, `git-worktree-lock`, `git-worktree-unlock`, `git-worktree-move`, `git-worktree-prune`, `git-worktree-repair`, `git-worktree-update`, `git-worktree-update-all` | Repository/destination directories, worktree branches, branch kind `user`/`feature`/`release`, and legacy deletion Boolean settings. |
 | `git-config-set`, `git-stash-save`, `git-stash-restore`, `git-restore`, `git-sync`, `git-stale-branch`, `git-status-summary`, `git-status-segment`, `git-repo-new`, `git-repo-repair` | Config scope `local`/`global`/`system`, existing stash selectors, local source refs, configured remotes, repository directories and literal restore paths. Restore paths are relative to the explicitly selected repository. |

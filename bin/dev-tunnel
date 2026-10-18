@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# dev-tunnel — Microsoft devtunnel CLI wrappers, ported from Shmuelie.DevTunnel.
+set -euo pipefail
+_SHM_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+source "$_SHM_ROOT/lib/common.sh"
+source "$_SHM_ROOT/lib/devtunnel/devtunnel-common.sh"
+
+devtunnel_main "$@"

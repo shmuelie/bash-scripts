@@ -113,8 +113,23 @@ EOF
     grep -q 'shellcheck' "$CALL_LOG"
     grep -q 'bats' "$CALL_LOG"
     grep -q 'nodejs' "$CALL_LOG"
+    grep -qE '(^| )python3( |$)' "$CALL_LOG"
     [[ "$output" == *"Manual dependency: dotnet"* ]]
     [[ "$output" == *"Manual dependency: code"* ]]
+    [[ "$output" == *"Manual dependency: devtunnel"* ]]
+    ! grep -q 'devtunnel' "$CALL_LOG"
+}
+
+@test "Python supervision dependency uses platform package names without installing devtunnel" {
+    run bash -c '
+        source "$1/lib/setup/install-deps.sh"
+        for manager in apt dnf yum pacman zypper brew; do
+            printf "%s:%s\n" "$manager" "$(package_for_dependency "$manager" python3)"
+            [[ -z "$(package_for_dependency "$manager" devtunnel)" ]] || exit 1
+        done
+    ' -- "$REPO_ROOT"
+    [ "$status" -eq 0 ]
+    [ "$output" = $'apt:python3\ndnf:python3\nyum:python3\npacman:python\nzypper:python3\nbrew:python' ]
 }
 
 @test "package-manager partial failure is returned after dependency recheck" {

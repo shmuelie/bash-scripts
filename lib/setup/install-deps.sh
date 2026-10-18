@@ -39,13 +39,14 @@ package_for_dependency() {
         apt:bash) echo bash ;; apt:git) echo git ;; apt:jq) echo jq ;;
         apt:shellcheck) echo shellcheck ;; apt:bats) echo bats ;;
         apt:fzf) echo fzf ;; apt:node) echo nodejs ;; apt:npm) echo npm ;;
-        apt:pip) echo python3-pip ;; apt:perf) echo linux-tools-common ;;
+        apt:python3) echo python3 ;; apt:pip) echo python3-pip ;; apt:perf) echo linux-tools-common ;;
         apt:dpkg-query) echo dpkg ;; apt:flatpak) echo flatpak ;; apt:snap) echo snapd ;;
 
         dnf:bash|yum:bash) echo bash ;; dnf:git|yum:git) echo git ;;
         dnf:jq|yum:jq) echo jq ;; dnf:shellcheck|yum:shellcheck) echo ShellCheck ;;
         dnf:bats|yum:bats) echo bats ;; dnf:fzf|yum:fzf) echo fzf ;;
         dnf:node|yum:node) echo nodejs ;; dnf:npm|yum:npm) echo npm ;;
+        dnf:python3|yum:python3) echo python3 ;;
         dnf:pip|yum:pip) echo python3-pip ;; dnf:perf|yum:perf) echo perf ;;
         dnf:rpm|yum:rpm) echo rpm ;; dnf:flatpak|yum:flatpak) echo flatpak ;;
         dnf:snap|yum:snap) echo snapd ;;
@@ -53,25 +54,27 @@ package_for_dependency() {
         pacman:bash) echo bash ;; pacman:git) echo git ;; pacman:jq) echo jq ;;
         pacman:shellcheck) echo shellcheck ;; pacman:bats) echo bats ;;
         pacman:fzf) echo fzf ;; pacman:node) echo nodejs ;; pacman:npm) echo npm ;;
-        pacman:pip) echo python-pip ;; pacman:uv) echo uv ;; pacman:perf) echo perf ;;
+        pacman:python3) echo python ;; pacman:pip) echo python-pip ;; pacman:uv) echo uv ;; pacman:perf) echo perf ;;
         pacman:flatpak) echo flatpak ;;
 
         zypper:bash) echo bash ;; zypper:git) echo git ;; zypper:jq) echo jq ;;
         zypper:shellcheck) echo ShellCheck ;; zypper:bats) echo bats ;;
         zypper:fzf) echo fzf ;; zypper:node) echo nodejs ;; zypper:npm) echo npm ;;
+        zypper:python3) echo python3 ;;
         zypper:pip) echo python3-pip ;; zypper:perf) echo perf ;; zypper:rpm) echo rpm ;;
         zypper:flatpak) echo flatpak ;;
 
         brew:bash) echo bash ;; brew:git) echo git ;; brew:jq) echo jq ;;
         brew:shellcheck) echo shellcheck ;; brew:bats) echo bats-core ;;
         brew:fzf) echo fzf ;; brew:node|brew:npm) echo node ;;
-        brew:pip) echo python ;; brew:uv) echo uv ;;
+        brew:python3|brew:pip) echo python ;; brew:uv) echo uv ;;
     esac
 }
 
 manual_dependency_hint() {
     case "$1" in
         dotnet) echo 'install the .NET SDK from https://dotnet.microsoft.com/download' ;;
+        devtunnel) echo 'install Microsoft devtunnel 1.0.2115 or compatible 1.x from https://learn.microsoft.com/azure/developer/dev-tunnels/get-started' ;;
         uv) echo 'install uv from https://docs.astral.sh/uv/getting-started/installation/' ;;
         code) echo 'install Visual Studio Code from https://code.visualstudio.com/download' ;;
         perf) echo 'install the perf package matching your OS and kernel' ;;
@@ -99,7 +102,7 @@ install_dependencies() {
     local install_status=0
 
     if [[ "$tier" == "all" ]]; then
-        dependencies+=(shellcheck bats fzf node npm dotnet pip uv code perf systemctl flatpak snap)
+        dependencies+=(shellcheck bats fzf node npm dotnet python3 pip uv code perf systemctl flatpak snap devtunnel)
     fi
 
     manager_info="$(detect_package_manager)"

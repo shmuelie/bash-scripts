@@ -72,7 +72,7 @@ export PATH="/path/to/bash-scripts/bin:$PATH"
 ## Shell completion
 
 The installer activates [Bash and zsh completion](docs/completions.md) for all
-60 public commands, including subcommands, supported flags, enumerated values,
+61 public commands, including subcommands, supported flags, enumerated values,
 quoted paths, and locally scoped Git/Copilot identifiers. Open a new shell
 after installing, or source the configured rc file. Static completion makes no
 network calls and never installs dependencies or performs command mutations.
@@ -89,6 +89,7 @@ commands, scope rules, and intentional dynamic-discovery limitations.
 |---|---|---|
 | [Git](docs/git.md) | Ported | Branches, tags, stashes, literal restoration, worktrees, bulk updates, repo layout, status, multi-account sync, completion |
 | [Copilot](docs/copilot.md) | Ported | Copilot CLI launcher, filtered sessions, selector callbacks, lossless merges, plugins, marketplaces, MCP |
+| [Dev tunnels](docs/devtunnel.md) | Ported | Accounts, tunnel/port/access management, foreground hosting/connections, tokens and diagnostics |
 | [Node](docs/node.md) | Ported | Node/nvm versions, npm packages, Azure DevOps npm credentials |
 | [Utilities](docs/utilities.md) | Ported | .NET, Python, VS Code, terminal, services, diagnostics |
 | [Package updates](docs/packages.md) | Ported | Provider-neutral updates for npm, pip, .NET tools, uv, VS Code, and configured PowerShell resources |
@@ -137,6 +138,10 @@ noninteractive scripts still print the target path without changing directory.
   descriptive paginated terminal picker.
 - `node` for the Copilot session-maintenance subcommands (always present where
   the Copilot CLI runs).
+- `python3` and a separately installed Microsoft `devtunnel` 1.0.2115 or
+  compatible 1.x for `dev-tunnel`; no helper import or preview runs the CLI.
+  Opt-in `./install.sh --install-deps --deps all` maps Python to platform
+  packages and reports devtunnel's manual installation instructions.
 
 ## Development
 
