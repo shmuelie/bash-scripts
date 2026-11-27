@@ -135,7 +135,7 @@ EOF
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$PICKER_LOG.args"
 cat > "$PICKER_LOG"
-sed -n '2p' "$PICKER_LOG"
+grep -Fx 'B - Older' "$PICKER_LOG"
 EOF
     chmod +x "$WORK/stub/fzf"
 
