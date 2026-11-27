@@ -194,6 +194,33 @@ EOF
     [[ "$output" == *'Invalid Copilot session selection'* ]]
 }
 
+@test "fzf without the start event opens help on Enter before accepting a session choice" {
+    candidates 2
+    unset SHM_TTY_PATH
+    export FZF_OPENED="$WORK/fzf-opened"
+    cat > "$WORK/bin/fzf" <<'EOF'
+#!/usr/bin/env bash
+for arg in "$@"; do
+    if [[ "$arg" == --bind=start:* ]]; then
+        printf 'unsupported key: start\n' >&2
+        exit 2
+    fi
+done
+mapfile -t options
+if [[ ! -e "$FZF_OPENED" ]]; then
+    touch "$FZF_OPENED"
+    printf '%s\n' "${options[0]}"
+else
+    printf '%s\n' "${options[@]}" | grep -Fx 'B - Task 2'
+fi
+EOF
+    chmod +x "$WORK/bin/fzf"
+    run copilot_paginated_picker rows
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'Name: Task 1'* ]]
+    [ "${lines[-1]}" = session-002 ]
+}
+
 @test "actual fzf accepts a descriptive choice through an explicit filter without a terminal" {
     have_cmd fzf || skip 'fzf is not installed'
     candidates 2

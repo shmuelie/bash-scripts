@@ -68,7 +68,7 @@ copilot_paginated_picker() {
         log_error 'Session selection requires console input or --selector.'
         return 1
     fi
-    local page_end i choice key matched status context
+    local page_end i choice key matched status context help_choice='? - Full session details'
     local -a choices=()
     while :; do
         page_end=$((page_start + page_size))
@@ -79,15 +79,17 @@ copilot_paginated_picker() {
         done
         [[ "$page_start" -eq 0 ]] || choices+=('P - Previous page')
         [[ "$page_end" -ge "$count" ]] || choices+=('M - Next page')
-        choices+=('N - New session' 'C - Cancel' '? - Full session details')
+        choices+=('N - New session' 'C - Cancel')
         context="Sessions $((page_start + 1))-$page_end of $count (page $((page_start / page_size + 1)) of $(((count + page_size - 1) / page_size))). No default selection."
         if [[ "$use_fzf" == "1" ]]; then
+            # Focus help rather than a session without relying on newer fzf events.
+            choices=("$help_choice" "${choices[@]}")
             local details
             details="$(printf '%s' "$presentation" | jq -r --argjson start "$page_start" --argjson stop "$page_end" \
                 '.[$start:$stop] | map(.help) | join("\n\n")')" || return 1
             status=0
             choice="$(printf '%s\n' "${choices[@]}" |
-                fzf --prompt='Session> ' --height=40% --reverse --bind=start:last \
+                fzf --prompt='Session> ' --height=40% --reverse \
                     --header="$context"$'\n\n'"$details")" || status=$?
             if [[ "$status" -ne 0 ]]; then
                 [[ "$status" -eq 130 ]] || log_error 'No Copilot session selected.'
@@ -102,7 +104,7 @@ copilot_paginated_picker() {
             choice="${choice:0:1}"
         else
             printf '\n%s\n' "$context" >&2
-            printf '%s\n' "${choices[@]}" >&2
+            printf '%s\n' "${choices[@]}" "$help_choice" >&2
             printf 'Session key (? or ?A for details): ' >&2
             if ! IFS= read -r -u "$tty_fd" choice; then
                 exec {tty_fd}<&-
